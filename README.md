@@ -17,6 +17,15 @@ Elderly healthcare management often fails not from a lack of medicine, but from 
 * **The Problem:** Reminder notifications get sent into noisy family group chats or dismissed accidentally. A caregiver assumes family handled it; family assumes the nurse handled it.
 * **Our Solution:** **Guardian Oasis** transforms passive notifications into **CareLoop** — a closed-loop escalation and handoff engine. When a routine goes unacknowledged, Guardian Oasis doesn't spam everyone: it follows the elder's preferences, creates an owned follow-up task for the assigned caregiver, and records a permanent, timestamped resolution trail.
 
+
+## 🧭 Assumptions & Demo Scope
+
+- The demo uses fictional sample data for Eleanor Thompson and other sample care-circle members. Do not enter real patient or medical information.
+- Demo access codes and sample profiles are for hackathon evaluation only; they are not production identity credentials.
+- Medication schedules, reminders, and care tasks are organisational aids. The platform does not diagnose conditions, prescribe medication, or replace advice from a qualified healthcare professional.
+- MedSutra AI output is informational and must be reviewed by an authorised human before any medication record or care decision is changed.
+- The project demonstrates a hackathon prototype. Email delivery, persistent storage, and production deployment depend on the relevant environment variables and external services being configured correctly.
+
 ---
 
 ## 🚀 Quick Start
@@ -24,7 +33,7 @@ Elderly healthcare management often fails not from a lack of medicine, but from 
 ### 1. Clone & Install
 ```bash
 git clone https://github.com/bhavesh-patil2007/catalyst-hackathon.git
-cd "catalyst hackathon"
+cd catalyst-hackathon
 npm install && npm run dev
 ```
 
