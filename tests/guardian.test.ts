@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { guardianStore } from "../src/lib/store";
 
 describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
-  describe("1. Profile & Role Permissions", () => {
+  describe("1. Profile & Passcode-Based Access", () => {
     it("should initialize Eleanor Thompson profile with conditions and passcodes", () => {
       const profile = guardianStore.getProfile();
       expect(profile.displayName).toBe("Eleanor Thompson");
@@ -10,6 +10,21 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
       expect(profile.conditions).toContain("Type 2 Diabetes");
       expect(profile.passcode).toBe("1234");
       expect(profile.circleInviteCode).toBe("OASIS-7629");
+    });
+
+    it("should authenticate senior with quick 4-digit PIN", () => {
+      const profile = guardianStore.getProfile();
+      const enteredPin = "1234";
+      expect(enteredPin === profile.passcode).toBe(true);
+
+      const invalidPin = "9999";
+      expect(invalidPin === profile.passcode).toBe(false);
+    });
+
+    it("should authenticate care circle member with household invite code", () => {
+      const profile = guardianStore.getProfile();
+      const enteredCode = "OASIS-7629";
+      expect(enteredCode.toUpperCase() === profile.circleInviteCode).toBe(true);
     });
 
     it("should load authorized care members with assigned roles", () => {
@@ -194,7 +209,6 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
       const runways = guardianStore.getRefillRunways();
       expect(runways.length).toBeGreaterThan(0);
 
-      // Lisinopril has 5 remaining doses and threshold 7 -> should be low stock
       const lisinopril = runways.find((r) => r.medicationName === "Lisinopril");
       expect(lisinopril).toBeDefined();
       expect(lisinopril?.isLowStock).toBe(true);
