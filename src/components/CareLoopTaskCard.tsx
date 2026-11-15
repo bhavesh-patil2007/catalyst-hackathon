@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Clock,
   ShieldAlert,
+  Share2,
 } from "lucide-react";
 import { CareTask, UserRole } from "@/types";
 
@@ -19,6 +20,7 @@ interface CareLoopTaskCardProps {
   activeRole: UserRole;
   currentCaregiverName: string;
   onClaim: (taskId: string) => Promise<void> | void;
+  onHandoff?: (taskId: string, toCaregiver: string, note: string) => Promise<void> | void;
   onResolve: (
     taskId: string,
     outcome: CareTask["resolutionOutcome"],
@@ -31,9 +33,13 @@ export function CareLoopTaskCard({
   activeRole,
   currentCaregiverName,
   onClaim,
+  onHandoff,
   onResolve,
 }: CareLoopTaskCardProps) {
   const [resolving, setResolving] = useState(false);
+  const [handingOff, setHandingOff] = useState(false);
+  const [targetCaregiver, setTargetCaregiver] = useState("David Thompson (Backup)");
+  const [handoffNote, setHandoffNote] = useState("");
   const [outcome, setOutcome] = useState<CareTask["resolutionOutcome"]>("spoke_with_elder");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
@@ -42,6 +48,22 @@ export function CareLoopTaskCard({
     setLoading(true);
     try {
       await onClaim(task.id);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleHandoff = async () => {
+    if (!handoffNote.trim()) {
+      alert("Please provide a handoff transition note.");
+      return;
+    }
+    setLoading(true);
+    try {
+      if (onHandoff) {
+        await onHandoff(task.id, targetCaregiver, handoffNote);
+      }
+      setHandingOff(false);
     } finally {
       setLoading(false);
     }
@@ -118,7 +140,6 @@ export function CareLoopTaskCard({
               Assigned to: <strong>{task.assignedToName}</strong>
             </p>
 
-            {/* Claimed or Resolved metadata */}
             {task.status === "CLAIMED" && (
               <div className="mt-2 text-xs text-amber-900 bg-amber-100/70 px-2.5 py-1 rounded-md inline-flex items-center space-x-1.5">
                 <UserCheck className="w-3.5 h-3.5" />
@@ -140,29 +161,92 @@ export function CareLoopTaskCard({
         </div>
 
         {/* Right CTA Actions */}
-        <div className="shrink-0 self-start sm:self-center">
+        <div className="shrink-0 self-start sm:self-center flex items-center space-x-2">
           {task.status === "OPEN" && (
             <button
               disabled={loading}
               onClick={handleClaim}
-              className="inline-flex items-center space-x-2 bg-[#2d4a3e] hover:bg-[#385b4c] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition-all focus:ring-2 focus:ring-emerald-400 disabled:opacity-50"
+              className="inline-flex items-center space-x-2 bg-[#2d4a3e] hover:bg-[#385b4c] text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-xs transition-all focus:ring-2 focus:ring-emerald-400 disabled:opacity-50"
             >
               <UserCheck className="w-4 h-4" />
               <span>Claim this task</span>
             </button>
           )}
 
-          {task.status === "CLAIMED" && !resolving && (
-            <button
-              onClick={() => setResolving(true)}
-              className="inline-flex items-center space-x-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition-all focus:ring-2 focus:ring-emerald-400"
-            >
-              <CheckCircle className="w-4 h-4" />
-              <span>Record Resolution</span>
-            </button>
+          {task.status === "CLAIMED" && !resolving && !handingOff && (
+            <>
+              <button
+                onClick={() => setHandingOff(true)}
+                className="inline-flex items-center space-x-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-medium px-3 py-2 rounded-xl border border-gray-300 transition-colors"
+                title="Relay / Hand off task to another caregiver"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Relay Handoff</span>
+              </button>
+
+              <button
+                onClick={() => setResolving(true)}
+                className="inline-flex items-center space-x-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-xs transition-all focus:ring-2 focus:ring-emerald-400"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>Record Resolution</span>
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Feature 4: Caregiver Relay / Handoff Form */}
+      {handingOff && (
+        <div className="mt-4 pt-4 border-t border-gray-200 bg-gray-50/80 p-3 rounded-xl">
+          <div className="text-xs font-bold text-gray-800 mb-2 flex items-center space-x-1.5">
+            <Share2 className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Caregiver Relay & Shift Handoff:</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Transfer Ownership To</label>
+              <select
+                value={targetCaregiver}
+                onChange={(e) => setTargetCaregiver(e.target.value)}
+                className="w-full text-xs border border-gray-300 rounded-lg p-2 bg-white text-gray-900"
+              >
+                <option value="David Thompson (Backup)">David Thompson (Backup Family Contact)</option>
+                <option value="Sarah Thompson (Family Manager)">Sarah Thompson (Family Manager)</option>
+                <option value="Nurse Michael, RN">Nurse Michael, RN (Evening Shift)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Handoff Instructions</label>
+              <input
+                type="text"
+                value={handoffNote}
+                onChange={(e) => setHandoffNote(e.target.value)}
+                placeholder="e.g. Called Eleanor twice, no answer. Please visit in person."
+                className="w-full text-xs border border-gray-300 rounded-lg p-2 bg-white text-gray-900"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end space-x-2">
+            <button
+              onClick={() => setHandingOff(false)}
+              className="text-xs text-gray-600 px-3 py-1.5 rounded-lg border border-gray-300"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={loading}
+              onClick={handleHandoff}
+              className="text-xs font-semibold bg-[#2d4a3e] text-white px-4 py-1.5 rounded-lg shadow-xs"
+            >
+              {loading ? "Relaying..." : "Confirm Handoff"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Resolution input form */}
       {resolving && (

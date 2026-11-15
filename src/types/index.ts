@@ -7,6 +7,7 @@ export type DoseStatus =
   | "MARKED_TAKEN"
   | "SKIPPED"
   | "NEEDS_HELP"
+  | "NOT_SURE"
   | "UNCONFIRMED"
   | "RESOLVED";
 
@@ -21,6 +22,7 @@ export interface CareProfile {
   passcode: string; // 4-digit elder PIN
   circleInviteCode: string; // Family/Caregiver invite code
   timezone: string;
+  locale: "en" | "hi";
 }
 
 export interface CareMember {
@@ -40,14 +42,16 @@ export interface Medication {
   name: string;
   dosage: string;
   instructions: string;
-  pillColor: string; // e.g., 'emerald', 'sky', 'amber', 'rose'
+  pillColor: string;
   pillShape: "round" | "capsule" | "oval" | "liquid";
   active: boolean;
   currentVersion: number;
   remainingQuantity: number;
+  dailyFrequency: number;
   refillThreshold: number;
-  scheduleTime: string; // e.g. "08:00 AM"
+  scheduleTime: string;
   slot: "morning" | "afternoon" | "evening" | "bedtime";
+  silentRoutine?: boolean; // "Do not notify family for this routine"
 }
 
 export interface MedicationVersion {
@@ -71,10 +75,11 @@ export interface DoseOccurrence {
   instructions: string;
   pillColor: string;
   pillShape: string;
-  scheduledTime: string; // e.g. "08:00 AM"
+  scheduledTime: string;
   scheduledIso: string;
   status: DoseStatus;
   updatedAt: string;
+  silentRoutine?: boolean;
   checkIn?: DoseCheckIn;
 }
 
@@ -119,9 +124,15 @@ export interface CareTask {
   status: "OPEN" | "CLAIMED" | "RESOLVED";
   claimedBy?: string;
   claimedAt?: string;
-  resolutionOutcome?: "spoke_with_elder" | "visited_in_person" | "self_resolved" | "unable_to_reach";
+  resolutionOutcome?:
+    | "spoke_with_elder"
+    | "visited_in_person"
+    | "self_resolved"
+    | "unable_to_reach"
+    | "handed_off";
   resolutionNote?: string;
   resolvedAt?: string;
+  handedOffTo?: string;
   priority: "HIGH" | "MEDIUM" | "URGENT";
   createdAt: string;
 }
@@ -161,4 +172,14 @@ export interface DailyCareBrief {
   generatedAt: string;
   isAiGrounded: boolean;
   sourceRecords: string[];
+}
+
+export interface RefillRunway {
+  medicationId: string;
+  medicationName: string;
+  remainingQuantity: number;
+  dailyConsumption: number;
+  daysRemaining: number;
+  estimatedRunOutDate: string;
+  isLowStock: boolean;
 }

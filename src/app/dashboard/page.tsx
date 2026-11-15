@@ -9,6 +9,7 @@ import { EmailNotificationDrawer } from "@/components/EmailNotificationDrawer";
 import { DailyCareBriefModal } from "@/components/DailyCareBriefModal";
 import { AddAppointmentModal } from "@/components/AddAppointmentModal";
 import { WhoCanSeeModal } from "@/components/WhoCanSeeModal";
+import { RefillRunwayWidget } from "@/components/RefillRunwayWidget";
 import {
   Calendar,
   AlertTriangle,
@@ -33,6 +34,7 @@ import {
   CareTask,
   NotificationJob,
   DailyCareBrief,
+  RefillRunway,
   DoseStatus,
   UserRole,
 } from "@/types";
@@ -48,9 +50,9 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState<CareTask[]>([]);
   const [notifications, setNotifications] = useState<NotificationJob[]>([]);
   const [brief, setBrief] = useState<DailyCareBrief | null>(null);
+  const [refillRunways, setRefillRunways] = useState<RefillRunway[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Modals
   const [isEmailDrawerOpen, setIsEmailDrawerOpen] = useState(false);
   const [isBriefModalOpen, setIsBriefModalOpen] = useState(false);
   const [isAddApptModalOpen, setIsAddApptModalOpen] = useState(false);
@@ -70,6 +72,7 @@ export default function DashboardPage() {
         setTasks(json.data.tasks);
         setNotifications(json.data.notifications);
         setBrief(json.data.brief);
+        setRefillRunways(json.data.refillRunways || []);
       }
     } catch (err) {
       console.error(err);
@@ -82,7 +85,12 @@ export default function DashboardPage() {
     fetchData();
   }, []);
 
-  const handleCheckIn = async (occurrenceId: string, status: DoseStatus, note?: string) => {
+  const handleCheckIn = async (
+    occurrenceId: string,
+    status: DoseStatus,
+    note?: string,
+    doNotNotifyFamily?: boolean
+  ) => {
     try {
       const actorName =
         activeRole === "owner"
@@ -100,6 +108,7 @@ export default function DashboardPage() {
           actorName,
           actorRole: activeRole,
           note,
+          doNotNotifyFamily,
         }),
       });
       const data = await res.json();
@@ -152,6 +161,31 @@ export default function DashboardPage() {
         await fetchData();
       } else {
         alert(data.error || "Failed to claim task");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleHandoffTask = async (taskId: string, toCaregiver: string, note: string) => {
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "handoff",
+          taskId,
+          fromCaregiver: "Priya Sharma, RN",
+          toCaregiver,
+          note,
+          actorRole: activeRole,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAlertBanner(`Task handed off to ${toCaregiver}.`);
+        setTimeout(() => setAlertBanner(null), 4000);
+        await fetchData();
       }
     } catch (err) {
       console.error(err);
@@ -242,7 +276,6 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-[#f6f9f7]">
-      {/* Top Navbar */}
       <Navbar
         activeRole={activeRole}
         onRoleChange={(role) => setActiveRole(role as UserRole)}
@@ -251,7 +284,6 @@ export default function DashboardPage() {
         onOpenCareBrief={() => setIsBriefModalOpen(true)}
       />
 
-      {/* Alert toast banner */}
       {alertBanner && (
         <div className="bg-[#2d4a3e] text-white px-4 py-2.5 text-center text-xs font-medium shadow-sm transition-all animate-in slide-in-from-top flex items-center justify-center space-x-2">
           <CheckCircle2 className="w-4 h-4 text-emerald-300" />
@@ -259,9 +291,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Elder Header matching uploaded image */}
         <ElderHeader
           profile={profile}
           selectedDate={selectedDate}
@@ -271,11 +301,9 @@ export default function DashboardPage() {
           activeMedCount={medications.length}
         />
 
-        {/* 2-Column Responsive Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column (8 cols): Today's Schedule & CareLoop Follow-ups */}
+          {/* Left Column (8 cols) */}
           <div className="lg:col-span-8 space-y-6">
-            {/* CareLoop Follow-up Banner if there are active tasks */}
             {openTasks.length > 0 && (
               <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-5 shadow-xs">
                 <div className="flex items-center justify-between mb-3">
@@ -300,6 +328,7 @@ export default function DashboardPage() {
                       activeRole={activeRole}
                       currentCaregiverName="Priya Sharma, RN"
                       onClaim={handleClaimTask}
+                      onHandoff={handleHandoffTask}
                       onResolve={handleResolveTask}
                     />
                   ))}
@@ -307,7 +336,6 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* Today's Medication Routine list */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs">
               <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
                 <div>
@@ -345,7 +373,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Right Column (4 cols): Vitals, Next Appointments, AI Brief preview */}
+          {/* Right Column (4 cols) */}
           <div className="lg:col-span-4 space-y-6">
             {/* Grounded Daily Care Brief Preview */}
             <div className="bg-gradient-to-br from-[#2d4a3e] to-[#1e342b] text-white rounded-2xl p-5 shadow-sm border border-[#233a30]">
@@ -376,6 +404,11 @@ export default function DashboardPage() {
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
+
+            {/* Feature 7: Refill Runway Widget */}
+            {refillRunways.length > 0 && (
+              <RefillRunwayWidget runways={refillRunways} />
+            )}
 
             {/* Upcoming Doctor Appointments card */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs">
@@ -418,26 +451,12 @@ export default function DashboardPage() {
                     <div className="text-[11px] text-gray-500">
                       {appt.specialty} • {appt.clinicName}
                     </div>
-
-                    {appt.questionsToAsk.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-gray-200/60 text-[11px] text-gray-600">
-                        <span className="font-semibold text-gray-700">Pre-visit question:</span>{" "}
-                        &quot;{appt.questionsToAsk[0]}&quot;
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
-
-              <a
-                href="/appointments"
-                className="mt-3 block text-center text-xs text-emerald-800 font-semibold hover:underline"
-              >
-                View all appointments & prep checklists &rarr;
-              </a>
             </div>
 
-            {/* Vitals & Alerts widget matching mockup mobile screen */}
+            {/* Vitals & Alerts widget matching mockup */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs">
               <h3 className="text-sm font-bold text-gray-900 font-serif mb-3 flex items-center space-x-2">
                 <Activity className="w-4 h-4 text-emerald-700" />
@@ -450,7 +469,7 @@ export default function DashboardPage() {
                     <Heart className="w-4 h-4 text-rose-600 shrink-0" />
                     <div>
                       <span className="font-semibold block">High Heart Rate Flag</span>
-                      <span className="text-[11px] text-rose-700">98 bpm at 4:56 PM • Rested & recovered</span>
+                      <span className="text-[11px] text-rose-700">98 bpm at 4:56 PM • Rested</span>
                     </div>
                   </div>
                   <span className="text-[10px] text-gray-400">4:56 PM</span>
@@ -472,7 +491,6 @@ export default function DashboardPage() {
         </div>
       </main>
 
-      {/* Modals & Drawers */}
       <EmailNotificationDrawer
         isOpen={isEmailDrawerOpen}
         onClose={() => setIsEmailDrawerOpen(false)}

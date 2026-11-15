@@ -10,6 +10,7 @@ import {
   Pill,
   ChevronRight,
   Info,
+  EyeOff,
 } from "lucide-react";
 import { DoseOccurrence, DoseStatus, UserRole } from "@/types";
 
@@ -20,10 +21,12 @@ interface DoseCardProps {
   onCheckIn: (
     occurrenceId: string,
     status: DoseStatus,
-    note?: string
+    note?: string,
+    doNotNotifyFamily?: boolean
   ) => Promise<void> | void;
   onSimulateEscalate?: (occurrenceId: string) => void;
   simplifiedElderMode?: boolean;
+  locale?: "en" | "hi";
 }
 
 export function DoseCard({
@@ -33,15 +36,29 @@ export function DoseCard({
   onCheckIn,
   onSimulateEscalate,
   simplifiedElderMode = false,
+  locale = "en",
 }: DoseCardProps) {
   const [loading, setLoading] = useState(false);
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [skipNote, setSkipNote] = useState("");
+  const [doNotNotifyFamily, setDoNotNotifyFamily] = useState(false);
+
+  const t = {
+    markedTaken: locale === "hi" ? "दवाई ले ली" : "Marked taken",
+    remindLater: locale === "hi" ? "बाद में याद दिलाएं" : "Remind me later",
+    needHelp: locale === "hi" ? "मदद चाहिए" : "I need help",
+    notSure: locale === "hi" ? "पक्का नहीं पता" : "Not sure",
+    skipped: locale === "hi" ? "छोड़ दी" : "Skipped",
+    silentToggle:
+      locale === "hi"
+        ? "इस दवाई के लिए परिवार को सूचित न करें"
+        : "Do not notify family for this routine",
+  };
 
   const handleAction = async (status: DoseStatus, note?: string) => {
     setLoading(true);
     try {
-      await onCheckIn(occurrence.id, status, note);
+      await onCheckIn(occurrence.id, status, note, doNotNotifyFamily);
     } finally {
       setLoading(false);
       setShowNoteInput(false);
@@ -63,34 +80,41 @@ export function DoseCard({
         return (
           <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-            <span>Marked Taken</span>
+            <span>{t.markedTaken}</span>
           </span>
         );
       case "SNOOZED":
         return (
           <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
             <Clock className="w-3.5 h-3.5 text-amber-700" />
-            <span>Remind Me Later</span>
+            <span>{t.remindLater}</span>
+          </span>
+        );
+      case "NOT_SURE":
+        return (
+          <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-300">
+            <HelpCircle className="w-3.5 h-3.5 text-yellow-700" />
+            <span>{t.notSure}</span>
           </span>
         );
       case "SKIPPED":
         return (
           <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-800 border border-gray-300">
-            <span>Skipped</span>
+            <span>{t.skipped}</span>
           </span>
         );
       case "NEEDS_HELP":
         return (
           <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-300 animate-pulse">
             <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-            <span>Needs Assistance</span>
+            <span>{t.needHelp}</span>
           </span>
         );
       case "UNCONFIRMED":
         return (
           <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-300">
             <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
-            <span>Unconfirmed (Escalated)</span>
+            <span>Unconfirmed (CareLoop Escalated)</span>
           </span>
         );
       case "PENDING":
@@ -109,7 +133,6 @@ export function DoseCard({
     }
   };
 
-  // Color pill helper
   const pillColorClasses: Record<string, string> = {
     emerald: "bg-emerald-50 text-emerald-800 border-emerald-200",
     sky: "bg-sky-50 text-sky-800 border-sky-200",
@@ -146,6 +169,12 @@ export function DoseCard({
               <span className="text-xs text-gray-500 capitalize">
                 {occurrence.pillShape}
               </span>
+              {occurrence.silentRoutine && (
+                <span className="text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full inline-flex items-center space-x-1">
+                  <EyeOff className="w-2.5 h-2.5" />
+                  <span>Private Routine</span>
+                </span>
+              )}
               <button
                 onClick={speakDose}
                 className="text-gray-400 hover:text-emerald-700 p-1 rounded-full transition-colors"
@@ -165,7 +194,6 @@ export function DoseCard({
               {occurrence.instructions}
             </p>
 
-            {/* Check-in audit note if recorded */}
             {occurrence.checkIn && (
               <div className="mt-2 text-xs text-gray-500 flex items-center space-x-1.5 bg-gray-50 px-2.5 py-1 rounded-md border border-gray-100">
                 <Info className="w-3.5 h-3.5 text-gray-400" />
@@ -178,65 +206,78 @@ export function DoseCard({
           </div>
         </div>
 
-        {/* Right: Status badge */}
         <div className="shrink-0 self-start sm:self-center">
           {getStatusBadge(occurrence.status)}
         </div>
       </div>
 
-      {/* Primary Action Buttons (WCAG AA/AAA Senior Friendly Size > 48px) */}
       {occurrence.status !== "MARKED_TAKEN" && (
         <div className="mt-4 pt-4 border-t border-gray-100">
-          <div className="text-xs font-medium text-gray-500 mb-2">
-            Confirm care action:
+          {/* Elder Privacy Control (Feature 2) */}
+          <div className="flex items-center justify-between mb-3 text-xs">
+            <span className="font-medium text-gray-500">Confirm care action:</span>
+            <label className="flex items-center space-x-1.5 text-gray-500 hover:text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={doNotNotifyFamily}
+                onChange={(e) => setDoNotNotifyFamily(e.target.checked)}
+                className="rounded text-emerald-700 focus:ring-emerald-500 text-xs"
+              />
+              <span className="text-[11px]">{t.silentToggle}</span>
+            </label>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            {/* Mark Taken Button */}
+          {/* Accessible Buttons: Marked Taken, Remind Later, I Need Help, Not Sure, Skipped */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <button
               disabled={loading}
               onClick={() => handleAction("MARKED_TAKEN")}
-              className="min-h-[48px] bg-[#2d4a3e] hover:bg-[#385c4c] text-white font-semibold text-sm rounded-xl px-4 py-2.5 flex items-center justify-center space-x-2 shadow-sm transition-all focus:ring-2 focus:ring-emerald-400 disabled:opacity-50"
+              className="min-h-[48px] bg-[#2d4a3e] hover:bg-[#385c4c] text-white font-semibold text-xs sm:text-sm rounded-xl px-3 py-2.5 flex items-center justify-center space-x-1.5 shadow-xs transition-all focus:ring-2 focus:ring-emerald-400 disabled:opacity-50"
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-              <span>Marked taken</span>
+              <span>{t.markedTaken}</span>
             </button>
 
-            {/* Remind Me Later (Snooze) Button */}
             <button
               disabled={loading}
               onClick={() => handleAction("SNOOZED")}
-              className="min-h-[48px] bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-sm rounded-xl px-4 py-2.5 flex items-center justify-center space-x-2 transition-all focus:ring-2 focus:ring-amber-400 disabled:opacity-50"
+              className="min-h-[48px] bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold text-xs sm:text-sm rounded-xl px-3 py-2.5 flex items-center justify-center space-x-1.5 transition-all focus:ring-2 focus:ring-amber-400 disabled:opacity-50"
             >
               <Clock className="w-4 h-4 text-amber-700" />
-              <span>Remind me later</span>
+              <span>{t.remindLater}</span>
             </button>
 
-            {/* I Need Help Button (Bypasses grace period, immediately creates high-priority caregiver alert) */}
             <button
               disabled={loading}
               onClick={() => handleAction("NEEDS_HELP", "Elder requested direct assistance")}
-              className="min-h-[48px] bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 font-semibold text-sm rounded-xl px-4 py-2.5 flex items-center justify-center space-x-2 transition-all focus:ring-2 focus:ring-rose-400 disabled:opacity-50"
+              className="min-h-[48px] bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 font-semibold text-xs sm:text-sm rounded-xl px-3 py-2.5 flex items-center justify-center space-x-1.5 transition-all focus:ring-2 focus:ring-rose-400 disabled:opacity-50"
             >
               <HelpCircle className="w-4 h-4 text-rose-700" />
-              <span>I need help</span>
+              <span>{t.needHelp}</span>
             </button>
 
-            {/* Skipped Button */}
+            <button
+              disabled={loading}
+              onClick={() => handleAction("NOT_SURE", "Elder reported uncertainty regarding dose")}
+              className="min-h-[48px] bg-yellow-50 hover:bg-yellow-100 text-yellow-900 border border-yellow-300 font-semibold text-xs sm:text-sm rounded-xl px-3 py-2.5 flex items-center justify-center space-x-1.5 transition-all focus:ring-2 focus:ring-yellow-400 disabled:opacity-50"
+            >
+              <HelpCircle className="w-4 h-4 text-yellow-700" />
+              <span>{t.notSure}</span>
+            </button>
+
             <button
               disabled={loading}
               onClick={() => setShowNoteInput(!showNoteInput)}
-              className="min-h-[48px] bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-300 font-medium text-sm rounded-xl px-4 py-2.5 flex items-center justify-center space-x-1.5 transition-all focus:ring-2 focus:ring-gray-300 disabled:opacity-50"
+              className="min-h-[48px] bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-300 font-medium text-xs sm:text-sm rounded-xl px-3 py-2.5 flex items-center justify-center space-x-1 transition-all focus:ring-2 focus:ring-gray-300 disabled:opacity-50"
             >
-              <span>Skipped</span>
+              <span>{t.skipped}</span>
             </button>
           </div>
 
-          {/* Optional reason field when skipping */}
           {showNoteInput && (
             <div className="mt-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
               <label className="block text-xs font-medium text-gray-600 mb-1">
-                Optional reason for skipping (e.g. upset stomach, fasting, doctor advised):
+                Optional reason for skipping (e.g. upset stomach, doctor advised):
               </label>
               <div className="flex gap-2">
                 <input
@@ -256,7 +297,6 @@ export function DoseCard({
             </div>
           )}
 
-          {/* CareLoop Live Demo Trigger pill */}
           {onSimulateEscalate && occurrence.status !== "UNCONFIRMED" && (
             <div className="mt-3 flex items-center justify-end">
               <button

@@ -9,11 +9,13 @@ const checkInSchema = z.object({
     "SNOOZED",
     "SKIPPED",
     "NEEDS_HELP",
+    "NOT_SURE",
     "PENDING",
   ]),
   actorName: z.string().min(1),
   actorRole: z.enum(["owner", "family_manager", "caregiver", "read_only"]),
   note: z.string().optional(),
+  doNotNotifyFamily: z.boolean().optional(),
 });
 
 export async function POST(request: Request) {
@@ -21,7 +23,6 @@ export async function POST(request: Request) {
     const body = await request.json();
     const validated = checkInSchema.parse(body);
 
-    // Negative authorization check: read_only cannot mutate dose events
     if (validated.actorRole === "read_only") {
       return NextResponse.json(
         { success: false, error: "Read-only members cannot record check-ins" },
@@ -34,7 +35,8 @@ export async function POST(request: Request) {
       validated.status,
       validated.actorName,
       validated.actorRole,
-      validated.note
+      validated.note,
+      validated.doNotNotifyFamily
     );
 
     if (!updated) {

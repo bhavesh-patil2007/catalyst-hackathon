@@ -12,6 +12,7 @@ export async function GET() {
     const notifications = guardianStore.getNotifications();
     const auditEvents = guardianStore.getAuditEvents();
     const brief = guardianStore.getDailyCareBrief();
+    const refillRunways = guardianStore.getRefillRunways();
 
     return NextResponse.json({
       success: true,
@@ -25,6 +26,7 @@ export async function GET() {
         notifications,
         auditEvents,
         brief,
+        refillRunways,
       },
     });
   } catch (error) {

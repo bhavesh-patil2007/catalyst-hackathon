@@ -2,10 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { guardianStore } from "../src/lib/store";
 
 describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
-  beforeEach(() => {
-    // Fresh state check
-  });
-
   describe("1. Profile & Role Permissions", () => {
     it("should initialize Eleanor Thompson profile with conditions and passcodes", () => {
       const profile = guardianStore.getProfile();
@@ -64,7 +60,7 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
     });
   });
 
-  describe("3. Dose Check-in State Transitions", () => {
+  describe("3. Dose Check-in State Transitions & Elder Privacy", () => {
     it("should record MARKED_TAKEN check-in with exact timestamp and actor", () => {
       const occurrences = guardianStore.getOccurrences();
       const targetOcc = occurrences.find((o) => o.status === "SCHEDULED" || o.status === "PENDING");
@@ -98,9 +94,40 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
 
       expect(snoozed?.status).toBe("SNOOZED");
     });
+
+    it("should support NOT_SURE check-in state", () => {
+      const occurrences = guardianStore.getOccurrences();
+      const occ = occurrences[0];
+
+      const notSure = guardianStore.recordCheckIn(
+        occ.id,
+        "NOT_SURE",
+        "Eleanor Thompson",
+        "owner",
+        "Can't remember if taken"
+      );
+
+      expect(notSure?.status).toBe("NOT_SURE");
+    });
+
+    it("should respect elder privacy 'doNotNotifyFamily' flag", () => {
+      const occurrences = guardianStore.getOccurrences();
+      const occ = occurrences[0];
+
+      const checkIn = guardianStore.recordCheckIn(
+        occ.id,
+        "MARKED_TAKEN",
+        "Eleanor Thompson",
+        "owner",
+        "Private dose",
+        true
+      );
+
+      expect(checkIn?.silentRoutine).toBe(true);
+    });
   });
 
-  describe("4. CareLoop Escalation Engine & Task Ownership", () => {
+  describe("4. CareLoop Escalation Engine & Caregiver Relay Handoff", () => {
     it("should escalate an unconfirmed dose and create exactly 1 CareTask assigned to caregiver", () => {
       const occurrences = guardianStore.getOccurrences();
       const occ = occurrences[1];
@@ -113,7 +140,6 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
       expect(task.assignedToName).toContain("Priya");
       expect(guardianStore.getTasks().length).toBe(initialTasksCount + 1);
 
-      // Verify dose occurrence status changed to UNCONFIRMED
       const updatedOcc = guardianStore.getOccurrences().find((o) => o.id === occ.id);
       expect(updatedOcc?.status).toBe("UNCONFIRMED");
     });
@@ -128,6 +154,22 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
         expect(claimed?.status).toBe("CLAIMED");
         expect(claimed?.claimedBy).toBe("Priya Sharma, RN");
       }
+    });
+
+    it("should allow caregiver relay and handoff to another member", () => {
+      const tasks = guardianStore.getTasks();
+      const claimedTask = tasks.find((t) => t.status === "CLAIMED") || tasks[0];
+
+      const handedOff = guardianStore.handoffTask(
+        claimedTask.id,
+        "Priya Sharma, RN",
+        "David Thompson (Backup)",
+        "Shift ending, please confirm with Eleanor"
+      );
+
+      expect(handedOff?.resolutionOutcome).toBe("handed_off");
+      expect(handedOff?.assignedToName).toBe("David Thompson (Backup)");
+      expect(handedOff?.resolutionNote).toContain("Shift ending");
     });
 
     it("should allow caregiver to resolve task with recorded outcome and handoff note", () => {
@@ -147,7 +189,21 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
     });
   });
 
-  describe("5. Doctor Appointments Management", () => {
+  describe("5. Refill Runway Estimation", () => {
+    it("should calculate remaining days and flag low stock medications", () => {
+      const runways = guardianStore.getRefillRunways();
+      expect(runways.length).toBeGreaterThan(0);
+
+      // Lisinopril has 5 remaining doses and threshold 7 -> should be low stock
+      const lisinopril = runways.find((r) => r.medicationName === "Lisinopril");
+      expect(lisinopril).toBeDefined();
+      expect(lisinopril?.isLowStock).toBe(true);
+      expect(lisinopril?.daysRemaining).toBeLessThanOrEqual(7);
+      expect(lisinopril?.estimatedRunOutDate).toBeDefined();
+    });
+  });
+
+  describe("6. Doctor Appointments Management", () => {
     it("should fetch scheduled upcoming appointments with transport notes", () => {
       const appts = guardianStore.getAppointments();
       expect(appts.length).toBeGreaterThanOrEqual(1);
@@ -178,7 +234,7 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
     });
   });
 
-  describe("6. Notification Engine & Deduplication", () => {
+  describe("7. Notification Engine & Deduplication", () => {
     it("should suppress duplicate notification jobs with same dedupeKey", () => {
       const key = "test-dedupe-key-999";
       const job1 = {
@@ -203,11 +259,11 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
       };
 
       const secondSent = guardianStore.sendNotification(job2);
-      expect(secondSent).toBe(false); // Should be suppressed
+      expect(secondSent).toBe(false);
     });
   });
 
-  describe("7. Daily Care Brief Generation", () => {
+  describe("8. Daily Care Brief Generation", () => {
     it("should generate grounded factual summary without hallucinations", () => {
       const brief = guardianStore.getDailyCareBrief();
       expect(brief.isAiGrounded).toBe(true);

@@ -63,6 +63,27 @@ export default function CaregiverPage() {
     }
   };
 
+  const handleHandoff = async (taskId: string, toCaregiver: string, note: string) => {
+    const res = await fetch("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "handoff",
+        taskId,
+        fromCaregiver: "Priya Sharma, RN",
+        toCaregiver,
+        note,
+        actorRole: "caregiver",
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setBanner(`Task handed off to ${toCaregiver}. Handoff logged.`);
+      setTimeout(() => setBanner(null), 4000);
+      await fetchData();
+    }
+  };
+
   const handleResolve = async (
     taskId: string,
     outcome: CareTask["resolutionOutcome"],
@@ -141,7 +162,6 @@ export default function CaregiverPage() {
       )}
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-        {/* Header */}
         <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6 shadow-xs">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
@@ -182,7 +202,6 @@ export default function CaregiverPage() {
             </div>
           </div>
 
-          {/* Quick Filter Counts */}
           <div className="mt-6 pt-4 border-t border-gray-100 flex flex-wrap gap-2">
             <button
               onClick={() => setFilter("ALL")}
@@ -219,7 +238,6 @@ export default function CaregiverPage() {
           </div>
         </div>
 
-        {/* Task cards list */}
         <div className="space-y-4">
           {filteredTasks.length === 0 ? (
             <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
@@ -237,6 +255,7 @@ export default function CaregiverPage() {
                 activeRole="caregiver"
                 currentCaregiverName="Priya Sharma, RN"
                 onClaim={handleClaim}
+                onHandoff={handleHandoff}
                 onResolve={handleResolve}
               />
             ))

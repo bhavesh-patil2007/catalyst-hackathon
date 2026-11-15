@@ -11,9 +11,9 @@ import {
   DailyCareBrief,
   DoseStatus,
   UserRole,
+  RefillRunway,
 } from "@/types";
 
-// Seed data initialized directly from the user's Guardian Oasis mockup & prompt blueprint
 export const INITIAL_PROFILE: CareProfile = {
   id: "profile-eleanor-thompson",
   displayName: "Eleanor Thompson",
@@ -31,9 +31,10 @@ export const INITIAL_PROFILE: CareProfile = {
     "Emergency keybox passcode is with daughter Sarah",
     "Dr. Robert Vance is cardiologist at St. Jude Clinic",
   ],
-  passcode: "1234", // Elder quick 4-digit PIN
-  circleInviteCode: "OASIS-7629", // Family & Caregiver secure join code
+  passcode: "1234",
+  circleInviteCode: "OASIS-7629",
   timezone: "America/New_York",
+  locale: "en",
 };
 
 export const INITIAL_MEMBERS: CareMember[] = [
@@ -88,9 +89,11 @@ export const INITIAL_MEDICATIONS: Medication[] = [
     active: true,
     currentVersion: 1,
     remainingQuantity: 24,
+    dailyFrequency: 1,
     refillThreshold: 7,
     scheduleTime: "08:00 AM",
     slot: "morning",
+    silentRoutine: false,
   },
   {
     id: "med-lisinopril",
@@ -102,10 +105,12 @@ export const INITIAL_MEDICATIONS: Medication[] = [
     pillShape: "round",
     active: true,
     currentVersion: 1,
-    remainingQuantity: 18,
-    refillThreshold: 5,
+    remainingQuantity: 5, // Low stock to demonstrate Refill Runway!
+    dailyFrequency: 1,
+    refillThreshold: 7,
     scheduleTime: "08:00 AM",
     slot: "morning",
+    silentRoutine: false,
   },
   {
     id: "med-atorvastatin",
@@ -118,9 +123,11 @@ export const INITIAL_MEDICATIONS: Medication[] = [
     active: true,
     currentVersion: 1,
     remainingQuantity: 30,
+    dailyFrequency: 1,
     refillThreshold: 7,
     scheduleTime: "08:30 PM",
     slot: "bedtime",
+    silentRoutine: false,
   },
 ];
 
@@ -351,7 +358,6 @@ export const INITIAL_AUDIT_EVENTS: AuditEvent[] = [
   },
 ];
 
-// In-Memory store singleton for client and server
 class GuardianStore {
   profile: CareProfile = { ...INITIAL_PROFILE };
   members: CareMember[] = [...INITIAL_MEMBERS];
@@ -365,6 +371,10 @@ class GuardianStore {
 
   getProfile() {
     return this.profile;
+  }
+
+  setLocale(locale: "en" | "hi") {
+    this.profile.locale = locale;
   }
 
   getMembers() {
@@ -395,13 +405,38 @@ class GuardianStore {
     return this.auditEvents;
   }
 
-  // Record check-in from Elder or Caregiver
+  // Feature 7: Refill Runway Estimation
+  getRefillRunways(): RefillRunway[] {
+    return this.medications.map((med) => {
+      const daily = med.dailyFrequency || 1;
+      const days = Math.floor(med.remainingQuantity / daily);
+      const runOutDate = new Date();
+      runOutDate.setDate(runOutDate.getDate() + days);
+
+      return {
+        medicationId: med.id,
+        medicationName: med.name,
+        remainingQuantity: med.remainingQuantity,
+        dailyConsumption: daily,
+        daysRemaining: days,
+        estimatedRunOutDate: runOutDate.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
+        isLowStock: days <= med.refillThreshold,
+      };
+    });
+  }
+
+  // Record check-in from Elder or Caregiver (Supports NOT_SURE & silent routine)
   recordCheckIn(
     occurrenceId: string,
     status: DoseStatus,
     actorName: string,
     actorRole: UserRole,
-    note?: string
+    note?: string,
+    doNotNotifyFamily?: boolean
   ): DoseOccurrence | null {
     const occ = this.occurrences.find((o) => o.id === occurrenceId);
     if (!occ) return null;
@@ -409,6 +444,10 @@ class GuardianStore {
     const timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     occ.status = status;
     occ.updatedAt = timeString;
+    if (doNotNotifyFamily !== undefined) {
+      occ.silentRoutine = doNotNotifyFamily;
+    }
+
     occ.checkIn = {
       id: "chk-" + Date.now(),
       occurrenceId,
@@ -426,6 +465,9 @@ class GuardianStore {
       task.resolutionOutcome = "self_resolved";
       task.resolutionNote = `Self-reported taken by ${actorName}`;
       task.resolvedAt = timeString;
+    } else if (task && status === "NOT_SURE") {
+      task.priority = "URGENT";
+      task.resolutionNote = `Elder marked 'Not sure' - needs verification.`;
     }
 
     // Append to audit trail
@@ -437,7 +479,7 @@ class GuardianStore {
       action: `DOSE_${status}`,
       entityType: "DOSE",
       entityId: occ.id,
-      description: `${actorName} recorded status '${status}' for ${occ.medicationName} (${occ.doseText}).${note ? ` Note: "${note}"` : ""}`,
+      description: `${actorName} recorded status '${status}' for ${occ.medicationName} (${occ.doseText}).${note ? ` Note: "${note}"` : ""}${doNotNotifyFamily ? " [Family notification silenced by elder request]" : ""}`,
       timestamp: `Today at ${timeString}`,
     });
 
@@ -474,7 +516,6 @@ class GuardianStore {
 
     this.tasks.unshift(newTask);
 
-    // Queue notification to caregiver
     this.sendNotification({
       id: "notif-" + Date.now(),
       dedupeKey: `escalation-${occurrenceId}-${Date.now()}`,
@@ -487,7 +528,6 @@ class GuardianStore {
       timestamp: timeString,
     });
 
-    // Write audit event
     this.auditEvents.unshift({
       id: "aud-" + Date.now(),
       careProfileId: this.profile.id,
@@ -528,6 +568,39 @@ class GuardianStore {
     return task;
   }
 
+  // Feature 4: Caregiver Relay and Handoff
+  handoffTask(
+    taskId: string,
+    fromCaregiver: string,
+    toCaregiver: string,
+    handoffNote: string
+  ): CareTask | null {
+    const task = this.tasks.find((t) => t.id === taskId);
+    if (!task) return null;
+
+    const timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    task.status = "CLAIMED";
+    task.claimedBy = toCaregiver;
+    task.assignedToName = toCaregiver;
+    task.resolutionOutcome = "handed_off";
+    task.handedOffTo = toCaregiver;
+    task.resolutionNote = `Handoff from ${fromCaregiver} to ${toCaregiver}: "${handoffNote}"`;
+
+    this.auditEvents.unshift({
+      id: "aud-" + Date.now(),
+      careProfileId: this.profile.id,
+      actorName: fromCaregiver,
+      actorRole: "caregiver",
+      action: "TASK_HANDOFF",
+      entityType: "TASK",
+      entityId: task.id,
+      description: `${fromCaregiver} handed off follow-up task #${task.id} to ${toCaregiver}. Handoff note: "${handoffNote}".`,
+      timestamp: `Today at ${timeString}`,
+    });
+
+    return task;
+  }
+
   // Resolve follow-up task
   resolveTask(
     taskId: string,
@@ -559,7 +632,6 @@ class GuardianStore {
     return task;
   }
 
-  // Add Medication with immutable version guard
   addMedicationWithVersion(data: {
     name: string;
     dosage: string;
@@ -570,6 +642,7 @@ class GuardianStore {
     pillShape: "round" | "capsule" | "oval" | "liquid";
     reason: string;
     authorName: string;
+    silentRoutine?: boolean;
   }): Medication {
     const medId = "med-" + Date.now();
     const verId = "ver-" + Date.now();
@@ -585,9 +658,11 @@ class GuardianStore {
       active: true,
       currentVersion: 1,
       remainingQuantity: 30,
+      dailyFrequency: 1,
       refillThreshold: 7,
       scheduleTime: data.scheduleTime,
       slot: data.slot,
+      silentRoutine: data.silentRoutine || false,
     };
 
     const newVersion: MedicationVersion = {
@@ -606,7 +681,6 @@ class GuardianStore {
     this.medications.push(newMed);
     this.versions.push(newVersion);
 
-    // Add occurrence for today
     this.occurrences.push({
       id: "occ-" + Date.now(),
       medicationId: medId,
@@ -619,6 +693,7 @@ class GuardianStore {
       scheduledIso: new Date().toISOString(),
       status: "SCHEDULED",
       updatedAt: "Scheduled",
+      silentRoutine: data.silentRoutine || false,
     });
 
     this.auditEvents.unshift({
@@ -629,14 +704,13 @@ class GuardianStore {
       action: "MEDICATION_CREATED",
       entityType: "MEDICATION",
       entityId: medId,
-      description: `${data.authorName} created medication ${data.name} (${data.dosage}) with schedule ${data.scheduleTime}.`,
+      description: `${data.authorName} created medication ${data.name} (${data.dosage}) with schedule ${data.scheduleTime}. Reason: "${data.reason}".`,
       timestamp: `Today at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
     });
 
     return newMed;
   }
 
-  // Add Appointment
   addAppointment(appt: Omit<DoctorAppointment, "id" | "careProfileId">): DoctorAppointment {
     const newAppt: DoctorAppointment = {
       ...appt,
@@ -661,7 +735,6 @@ class GuardianStore {
   }
 
   sendNotification(job: NotificationJob): boolean {
-    // Check deduplication
     const exists = this.notifications.some((n) => n.dedupeKey === job.dedupeKey);
     if (exists) {
       return false;
@@ -670,7 +743,6 @@ class GuardianStore {
     return true;
   }
 
-  // Grounded Daily Care Brief generator (Strict schema, 0 hallucination)
   getDailyCareBrief(): DailyCareBrief {
     const totalScheduled = this.occurrences.length;
     const takenCount = this.occurrences.filter((o) => o.status === "MARKED_TAKEN").length;
@@ -717,5 +789,4 @@ Source: Verified application records only.`;
   }
 }
 
-// Global singleton instance
 export const guardianStore = new GuardianStore();

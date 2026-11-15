@@ -9,10 +9,25 @@ const claimSchema = z.object({
   actorRole: z.enum(["caregiver", "family_manager", "owner", "read_only"]),
 });
 
+const handoffSchema = z.object({
+  action: z.literal("handoff"),
+  taskId: z.string().min(1),
+  fromCaregiver: z.string().min(1),
+  toCaregiver: z.string().min(1),
+  note: z.string().min(1),
+  actorRole: z.enum(["caregiver", "family_manager", "owner", "read_only"]),
+});
+
 const resolveSchema = z.object({
   action: z.literal("resolve"),
   taskId: z.string().min(1),
-  outcome: z.enum(["spoke_with_elder", "visited_in_person", "self_resolved", "unable_to_reach"]),
+  outcome: z.enum([
+    "spoke_with_elder",
+    "visited_in_person",
+    "self_resolved",
+    "unable_to_reach",
+    "handed_off",
+  ]),
   note: z.string().min(1),
   actorName: z.string().min(1),
   actorRole: z.enum(["caregiver", "family_manager", "owner", "read_only"]),
@@ -31,6 +46,21 @@ export async function POST(request: Request) {
         );
       }
       const task = guardianStore.claimTask(taskId, caregiverName);
+      if (!task) {
+        return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, data: task });
+    }
+
+    if (body.action === "handoff") {
+      const { taskId, fromCaregiver, toCaregiver, note, actorRole } = handoffSchema.parse(body);
+      if (actorRole === "read_only") {
+        return NextResponse.json(
+          { success: false, error: "Read-only members cannot hand off care tasks" },
+          { status: 403 }
+        );
+      }
+      const task = guardianStore.handoffTask(taskId, fromCaregiver, toCaregiver, note);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }
