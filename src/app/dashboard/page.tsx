@@ -487,6 +487,35 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
+
+            {/* Smart Care Innovation Hub: MedSutra AI & Caregiver Wellbeing */}
+            <div className="bg-gradient-to-br from-[#243e33] to-[#1c3027] text-white rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-emerald-300" />
+                <h3 className="text-sm font-bold font-serif text-white">
+                  Smart Care Orbit AI
+                </h3>
+              </div>
+              <p className="text-xs text-emerald-100/80 leading-relaxed">
+                Parse Rx prescriptions with Gemini or track daily caregiver stress & burnout risk.
+              </p>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <a
+                  href="/medsutra"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2 px-3 rounded-xl text-center transition-all flex items-center justify-center space-x-1"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>MedSutra AI</span>
+                </a>
+                <a
+                  href="/wellbeing"
+                  className="bg-[#2f4d40] hover:bg-[#395c4e] text-emerald-100 text-xs font-semibold py-2 px-3 rounded-xl text-center border border-[#446d5c] transition-all flex items-center justify-center space-x-1"
+                >
+                  <Heart className="w-3.5 h-3.5 text-rose-300" />
+                  <span>Wellbeing</span>
+                </a>
+              </div>
+            </div>
           </div>
         </div>
       </main>

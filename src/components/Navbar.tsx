@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   HeartHandshake,
+  Heart,
   Search,
   Bell,
   Volume2,
@@ -84,12 +85,14 @@ export function Navbar({
   };
 
   const navItems = [
-    { label: "Family Home", href: "/dashboard" },
-    { label: "Today (Elder)", href: "/elder" },
-    { label: "CareLoop Inbox", href: "/caregiver" },
-    { label: "Medications", href: "/medications" },
-    { label: "Appointments", href: "/appointments" },
-    { label: "Timeline", href: "/timeline" },
+    { label: "Family Home", href: "/dashboard", icon: null },
+    { label: "Today (Elder)", href: "/elder", icon: null },
+    { label: "CareLoop Inbox", href: "/caregiver", icon: null },
+    { label: "Medications", href: "/medications", icon: null },
+    { label: "Appointments", href: "/appointments", icon: null },
+    { label: "Timeline", href: "/timeline", icon: null },
+    { label: "Wellbeing", href: "/wellbeing", icon: <Heart className="w-3.5 h-3.5 inline-block mr-1 text-emerald-300" /> },
+    { label: "MedSutra AI", href: "/medsutra", icon: <Sparkles className="w-3.5 h-3.5 inline-block mr-1 text-amber-300" /> },
   ];
 
   return (
@@ -130,7 +133,7 @@ export function Navbar({
                         : "text-emerald-100/90 hover:bg-[#385b4c] hover:text-white"
                     }`}
                   >
-                    {item.label}
+                    {item.icon}{item.label}
                   </a>
                 );
               })}

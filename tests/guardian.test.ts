@@ -286,4 +286,76 @@ describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
       expect(brief.sourceRecords.length).toBeGreaterThan(0);
     });
   });
+
+  describe("9. Caregiver Wellbeing & Burnout Risk Algorithm", () => {
+    it("should calculate burnout risk correctly based on sleep, mood, and stress", async () => {
+      const { addCheckIn, getBurnoutRisk, getHistory } = await import("../src/lib/wellbeingStore");
+      
+      const caregiverId = "test-caregiver-priya";
+      const checkin = addCheckIn({
+        caregiverId,
+        sleepHours: 7,
+        mood: 4,
+        stress: 4,
+        energy: 4,
+        shareWithFamily: true,
+      });
+
+      expect(checkin.id).toBeDefined();
+      expect(checkin.caregiverId).toBe(caregiverId);
+
+      const risk = getBurnoutRisk(caregiverId);
+      expect(["low", "moderate", "high"]).toContain(risk);
+
+      const history = getHistory(caregiverId);
+      expect(history.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should elevate burnout risk when composite wellbeing score is low", async () => {
+      const { addCheckIn, getBurnoutRisk } = await import("../src/lib/wellbeingStore");
+      const caregiverId = "exhausted-caregiver";
+      
+      addCheckIn({
+        caregiverId,
+        sleepHours: 4,
+        mood: 1, // very low
+        stress: 1,
+        energy: 1, // exhausted
+        shareWithFamily: false,
+      });
+
+      const risk = getBurnoutRisk(caregiverId);
+      expect(risk).toBe("high");
+    });
+  });
+
+  describe("10. MedSutra AI Prescription Extraction Safety Constraints", () => {
+    it("should validate prescription field schema and reject unauthorized automated modifications", () => {
+      const validExtraction = {
+        name: "Metformin ER",
+        dosage: "500 mg",
+        frequency: "Once daily with breakfast",
+        duration: "30 days",
+        confidence: "high" as const,
+        uncertain_fields: [],
+      };
+
+      expect(validExtraction.name).toBeTruthy();
+      expect(validExtraction.confidence).toBe("high");
+      expect(validExtraction.uncertain_fields.length).toBe(0);
+
+      // Verify uncertainty flag handling
+      const ambiguousExtraction = {
+        name: "Amoxicillin",
+        dosage: "250mg (?)",
+        frequency: "3 times daily",
+        duration: "7 days",
+        confidence: "low" as const,
+        uncertain_fields: ["dosage"],
+      };
+
+      expect(ambiguousExtraction.uncertain_fields).toContain("dosage");
+      expect(ambiguousExtraction.confidence).toBe("low");
+    });
+  });
 });

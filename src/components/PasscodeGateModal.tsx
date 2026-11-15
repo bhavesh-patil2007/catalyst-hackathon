@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Lock, KeyRound, ShieldCheck, CheckCircle2, AlertCircle, UserCheck } from "lucide-react";
+import { Lock, AlertCircle } from "lucide-react";
 import { UserRole } from "@/types";
 
 interface PasscodeGateModalProps {
@@ -22,12 +22,15 @@ export function PasscodeGateModal({
   const [mode, setMode] = useState<"elder" | "circle">("elder");
   const [pinDigits, setPinDigits] = useState<string[]>(["", "", "", ""]);
   const [inviteInput, setInviteInput] = useState("");
+  const [nameInput, setNameInput] = useState("");
+  const [emailInput, setEmailInput] = useState("");
   const [selectedRole, setSelectedRole] = useState<UserRole>("family_manager");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleDigitChange = (index: number, value: string) => {
+  const handleDigitChange = async (index: number, value: string) => {
     if (value.length > 1) value = value.slice(-1);
     const updated = [...pinDigits];
     updated[index] = value;
@@ -43,20 +46,55 @@ export function PasscodeGateModal({
     // Auto-submit on 4th digit
     if (index === 3 && value) {
       const fullPin = updated.join("");
-      if (fullPin === elderPin) {
-        onSuccess("owner");
-      } else {
-        setErrorMsg("Incorrect 4-digit PIN. Try '1234'");
+      setLoading(true);
+      try {
+        const res = await fetch("/api/auth/elder-pin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pin: fullPin }),
+        });
+        if (res.ok) {
+          onSuccess("owner");
+        } else {
+          const data = await res.json().catch(() => ({}));
+          setErrorMsg(data.error ?? "Incorrect 4-digit PIN. Try '1234'");
+          setPinDigits(["", "", "", ""]);
+          document.getElementById("pin-digit-0")?.focus();
+        }
+      } catch {
+        setErrorMsg("Network error. Please try again.");
+        setPinDigits(["", "", "", ""]);
+      } finally {
+        setLoading(false);
       }
     }
   };
 
-  const handleCircleSubmit = (e: React.FormEvent) => {
+  const handleCircleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inviteInput.trim().toUpperCase() === circleInviteCode.toUpperCase()) {
-      onSuccess(selectedRole);
-    } else {
-      setErrorMsg(`Invalid Circle Code. Use demo code '${circleInviteCode}'`);
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch("/api/auth/circle-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: inviteInput.trim(),
+          name: nameInput.trim() || undefined,
+          email: emailInput.trim() || undefined,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        onSuccess(data.role ?? selectedRole);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.error ?? `Invalid Circle Code. Use demo code '${circleInviteCode}'`);
+      }
+    } catch {
+      setErrorMsg("Network error. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -117,11 +155,18 @@ export function PasscodeGateModal({
                     type="password"
                     maxLength={1}
                     value={digit}
+                    disabled={loading}
                     onChange={(e) => handleDigitChange(idx, e.target.value)}
-                    className="w-12 h-14 text-center text-2xl font-bold rounded-xl border-2 border-gray-300 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
+                    className="w-12 h-14 text-center text-2xl font-bold rounded-xl border-2 border-gray-300 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-200 outline-none transition-all disabled:opacity-50"
                   />
                 ))}
               </div>
+
+              {loading && (
+                <p className="text-xs text-emerald-600 font-medium animate-pulse mb-2">
+                  Verifying…
+                </p>
+              )}
 
               <p className="text-[11px] text-gray-400 font-mono">
                 Demo Elder PIN: <strong>{elderPin}</strong>
@@ -152,6 +197,19 @@ export function PasscodeGateModal({
 
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Your Name (optional)
+                </label>
+                <input
+                  type="text"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  placeholder="e.g. Sarah Thompson"
+                  className="w-full text-sm border border-gray-300 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
                   Accessing As
                 </label>
                 <select
@@ -167,9 +225,10 @@ export function PasscodeGateModal({
 
               <button
                 type="submit"
-                className="w-full bg-[#2d4a3e] hover:bg-[#385b4c] text-white text-xs font-bold py-3 rounded-xl shadow-xs transition-colors"
+                disabled={loading}
+                className="w-full bg-[#2d4a3e] hover:bg-[#385b4c] text-white text-xs font-bold py-3 rounded-xl shadow-xs transition-colors disabled:opacity-60"
               >
-                Authenticate & Access Profile
+                {loading ? "Authenticating…" : "Authenticate & Access Profile"}
               </button>
 
               <p className="text-[11px] text-gray-400 text-center font-mono">
@@ -188,7 +247,7 @@ export function PasscodeGateModal({
 
         {/* Footer */}
         <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-between items-center text-xs">
-          <span className="text-gray-400">Security & Privacy by Design</span>
+          <span className="text-gray-400">Security &amp; Privacy by Design</span>
           <button
             onClick={onClose}
             className="text-gray-600 hover:text-gray-900 font-medium"

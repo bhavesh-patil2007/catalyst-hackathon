@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
+import { Resend } from "resend";
 
 const emailTestSchema = z.object({
   recipientEmail: z.string().email(),
@@ -49,15 +50,38 @@ export async function POST(request: Request) {
       timestamp: timeString,
     });
 
+    // Real email via Resend (if API key is configured)
+    let emailSent = false;
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        await resend.emails.send({
+          from: process.env.RESEND_FROM_EMAIL ?? "careorbit@yourdomain.com",
+          to: [validated.recipientEmail],
+          subject,
+          html: `<h2 style="color:#2d4a3e;">Guardian Oasis Care Reminder</h2><p>${subject}</p><p>${bodyPreview}</p><hr/><p style="font-size:12px;color:#888;">Sent by Guardian Oasis &mdash; ${new Date().toISOString()}</p>`,
+        });
+        emailSent = true;
+      } catch (emailError) {
+        // Log but don't fail — store notification is already recorded
+        console.error("[Resend] Email dispatch failed:", emailError);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      message: sent ? "Proactive email sent successfully" : "Duplicate email suppressed",
+      message: sent
+        ? emailSent
+          ? "Proactive email sent successfully via Resend"
+          : "Notification logged (Resend not configured or failed)"
+        : "Duplicate email suppressed",
       notification: {
         recipientEmail: validated.recipientEmail,
         subject,
         bodyPreview,
         dedupeKey,
         sentAt: timeString,
+        realEmailSent: emailSent,
       },
     });
   } catch (error) {
