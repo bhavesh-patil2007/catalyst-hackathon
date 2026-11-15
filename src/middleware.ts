@@ -13,7 +13,12 @@ const PROTECTED_PATHS = [
 ];
 
 const PUBLIC_EXACT_PATHS = ["/", "/login"];
-const PUBLIC_API_PREFIXES = ["/api/auth", "/api/health"];
+const PUBLIC_API_PREFIXES = [
+  "/api/auth",
+  "/api/health",
+  "/api/care/today",
+  "/api/care/escalate-demo",
+];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -27,7 +32,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Allow public landing, public login, and public API endpoints
+  // Allow public landing, login, health and explicitly public APIs
   if (
     PUBLIC_EXACT_PATHS.includes(pathname) ||
     PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))
@@ -35,12 +40,9 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check if accessing a protected page
-  const isProtectedPage = PROTECTED_PATHS.some((p) => pathname.startsWith(p));
+  // Check if accessing a protected page or any non-public route
   const sessionCookie = request.cookies.get("guardian_session");
-
-  if (isProtectedPage && !sessionCookie) {
-    // Redirect unauthenticated visitors directly to /login to eliminate redirect loops and deadlock
+  if (!sessionCookie) {
     const url = new URL("/login", request.url);
     url.searchParams.set("redirect", pathname);
     return NextResponse.redirect(url);
