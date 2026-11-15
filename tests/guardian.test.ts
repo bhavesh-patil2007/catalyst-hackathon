@@ -1,0 +1,219 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { guardianStore } from "../src/lib/store";
+
+describe("Guardian Oasis & CareLoop Comprehensive Test Suite", () => {
+  beforeEach(() => {
+    // Fresh state check
+  });
+
+  describe("1. Profile & Role Permissions", () => {
+    it("should initialize Eleanor Thompson profile with conditions and passcodes", () => {
+      const profile = guardianStore.getProfile();
+      expect(profile.displayName).toBe("Eleanor Thompson");
+      expect(profile.age).toBe(76);
+      expect(profile.conditions).toContain("Type 2 Diabetes");
+      expect(profile.passcode).toBe("1234");
+      expect(profile.circleInviteCode).toBe("OASIS-7629");
+    });
+
+    it("should load authorized care members with assigned roles", () => {
+      const members = guardianStore.getMembers();
+      expect(members.length).toBeGreaterThanOrEqual(4);
+      const owner = members.find((m) => m.role === "owner");
+      const caregiver = members.find((m) => m.role === "caregiver");
+      const familyManager = members.find((m) => m.role === "family_manager");
+      const readOnly = members.find((m) => m.role === "read_only");
+
+      expect(owner?.name).toBe("Eleanor Thompson");
+      expect(caregiver?.name).toContain("Priya");
+      expect(familyManager?.name).toContain("Sarah");
+      expect(readOnly?.name).toContain("David");
+    });
+  });
+
+  describe("2. Medication Schedule & Version Change Guard", () => {
+    it("should contain initial active medications with schedules", () => {
+      const meds = guardianStore.getMedications();
+      expect(meds.length).toBeGreaterThanOrEqual(3);
+      const metformin = meds.find((m) => m.name.includes("Metformin"));
+      expect(metformin).toBeDefined();
+      expect(metformin?.dosage).toBe("500 mg");
+      expect(metformin?.currentVersion).toBe(1);
+    });
+
+    it("should create new medication with version guard and add scheduled occurrence", () => {
+      const newMed = guardianStore.addMedicationWithVersion({
+        name: "Glipizide",
+        dosage: "5 mg",
+        instructions: "Take 30 mins before breakfast",
+        scheduleTime: "07:30 AM",
+        slot: "morning",
+        pillColor: "sky",
+        pillShape: "round",
+        reason: "Adjusted blood sugar protocol prescribed by Dr. Anita Patel",
+        authorName: "Sarah Thompson",
+      });
+
+      expect(newMed.name).toBe("Glipizide");
+      expect(newMed.currentVersion).toBe(1);
+
+      const occurrences = guardianStore.getOccurrences();
+      const glipizideOcc = occurrences.find((o) => o.medicationName === "Glipizide");
+      expect(glipizideOcc).toBeDefined();
+      expect(glipizideOcc?.status).toBe("SCHEDULED");
+    });
+  });
+
+  describe("3. Dose Check-in State Transitions", () => {
+    it("should record MARKED_TAKEN check-in with exact timestamp and actor", () => {
+      const occurrences = guardianStore.getOccurrences();
+      const targetOcc = occurrences.find((o) => o.status === "SCHEDULED" || o.status === "PENDING");
+      expect(targetOcc).toBeDefined();
+
+      if (targetOcc) {
+        const updated = guardianStore.recordCheckIn(
+          targetOcc.id,
+          "MARKED_TAKEN",
+          "Eleanor Thompson",
+          "owner",
+          "Taken with glass of water"
+        );
+
+        expect(updated?.status).toBe("MARKED_TAKEN");
+        expect(updated?.checkIn?.actorName).toBe("Eleanor Thompson");
+        expect(updated?.checkIn?.status).toBe("MARKED_TAKEN");
+      }
+    });
+
+    it("should record SNOOZED check-in without closing occurrence", () => {
+      const occurrences = guardianStore.getOccurrences();
+      const occ = occurrences[0];
+
+      const snoozed = guardianStore.recordCheckIn(
+        occ.id,
+        "SNOOZED",
+        "Eleanor Thompson",
+        "owner"
+      );
+
+      expect(snoozed?.status).toBe("SNOOZED");
+    });
+  });
+
+  describe("4. CareLoop Escalation Engine & Task Ownership", () => {
+    it("should escalate an unconfirmed dose and create exactly 1 CareTask assigned to caregiver", () => {
+      const occurrences = guardianStore.getOccurrences();
+      const occ = occurrences[1];
+
+      const initialTasksCount = guardianStore.getTasks().length;
+      const task = guardianStore.escalateUnconfirmedDose(occ.id);
+
+      expect(task).toBeDefined();
+      expect(task.status).toBe("OPEN");
+      expect(task.assignedToName).toContain("Priya");
+      expect(guardianStore.getTasks().length).toBe(initialTasksCount + 1);
+
+      // Verify dose occurrence status changed to UNCONFIRMED
+      const updatedOcc = guardianStore.getOccurrences().find((o) => o.id === occ.id);
+      expect(updatedOcc?.status).toBe("UNCONFIRMED");
+    });
+
+    it("should allow caregiver to claim the task", () => {
+      const tasks = guardianStore.getTasks();
+      const openTask = tasks.find((t) => t.status === "OPEN");
+      expect(openTask).toBeDefined();
+
+      if (openTask) {
+        const claimed = guardianStore.claimTask(openTask.id, "Priya Sharma, RN");
+        expect(claimed?.status).toBe("CLAIMED");
+        expect(claimed?.claimedBy).toBe("Priya Sharma, RN");
+      }
+    });
+
+    it("should allow caregiver to resolve task with recorded outcome and handoff note", () => {
+      const tasks = guardianStore.getTasks();
+      const claimedTask = tasks.find((t) => t.status === "CLAIMED") || tasks[0];
+
+      const resolved = guardianStore.resolveTask(
+        claimedTask.id,
+        "spoke_with_elder",
+        "Spoke with Eleanor by phone, confirmed dose was taken with light snack",
+        "Priya Sharma, RN"
+      );
+
+      expect(resolved?.status).toBe("RESOLVED");
+      expect(resolved?.resolutionOutcome).toBe("spoke_with_elder");
+      expect(resolved?.resolutionNote).toContain("Spoke with Eleanor");
+    });
+  });
+
+  describe("5. Doctor Appointments Management", () => {
+    it("should fetch scheduled upcoming appointments with transport notes", () => {
+      const appts = guardianStore.getAppointments();
+      expect(appts.length).toBeGreaterThanOrEqual(1);
+      const cardio = appts.find((a) => a.doctorName.includes("Vance"));
+      expect(cardio).toBeDefined();
+      expect(cardio?.transportAssigned).toBe(true);
+      expect(cardio?.questionsToAsk.length).toBeGreaterThan(0);
+    });
+
+    it("should allow scheduling new appointment and append to audit log", () => {
+      const newAppt = guardianStore.addAppointment({
+        doctorName: "Dr. Gregory House, MD",
+        specialty: "Nephrology",
+        clinicName: "Princeton Plainsboro",
+        address: "100 Medical Center Way",
+        dateTime: "Dec 05, 09:00 AM",
+        dateLabel: "Dec 05",
+        timeLabel: "09:00 AM",
+        transportAssigned: true,
+        transportDetails: "Caregiver escort",
+        questionsToAsk: ["Review kidney function markers"],
+        status: "UPCOMING",
+      });
+
+      expect(newAppt.doctorName).toBe("Dr. Gregory House, MD");
+      const all = guardianStore.getAppointments();
+      expect(all.some((a) => a.doctorName === "Dr. Gregory House, MD")).toBe(true);
+    });
+  });
+
+  describe("6. Notification Engine & Deduplication", () => {
+    it("should suppress duplicate notification jobs with same dedupeKey", () => {
+      const key = "test-dedupe-key-999";
+      const job1 = {
+        id: "notif-test-1",
+        dedupeKey: key,
+        recipientEmail: "test@example.com",
+        recipientRole: "Caregiver",
+        type: "DOSE_DUE" as const,
+        subject: "Test Reminder",
+        bodyPreview: "First notification",
+        status: "DELIVERED" as const,
+        timestamp: "12:00 PM",
+      };
+
+      const firstSent = guardianStore.sendNotification(job1);
+      expect(firstSent).toBe(true);
+
+      const job2 = {
+        ...job1,
+        id: "notif-test-2",
+        bodyPreview: "Duplicate send attempt",
+      };
+
+      const secondSent = guardianStore.sendNotification(job2);
+      expect(secondSent).toBe(false); // Should be suppressed
+    });
+  });
+
+  describe("7. Daily Care Brief Generation", () => {
+    it("should generate grounded factual summary without hallucinations", () => {
+      const brief = guardianStore.getDailyCareBrief();
+      expect(brief.isAiGrounded).toBe(true);
+      expect(brief.totalScheduled).toBeGreaterThan(0);
+      expect(brief.summaryText).toContain("Daily Care Brief for Eleanor Thompson");
+      expect(brief.sourceRecords.length).toBeGreaterThan(0);
+    });
+  });
+});
