@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { guardianStore } from "@/lib/store";
+import { getSession } from "@/lib/session";
 
 export async function GET() {
   try {
-    const profile = guardianStore.getProfile();
+    const session = await getSession();
+    const role = session?.authenticated ? session.role : undefined;
+
+    // Sanitize profile to prevent sensitive credentials (PINs) from being exposed in HTTP responses
+    const profile = guardianStore.getSanitizedProfile(role);
     const members = guardianStore.getMembers();
     const medications = guardianStore.getMedications();
     const occurrences = guardianStore.getOccurrences();

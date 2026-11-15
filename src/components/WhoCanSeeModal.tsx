@@ -57,7 +57,7 @@ export function WhoCanSeeModal({
                 <span>Senior Quick PIN</span>
               </div>
               <div className="text-base font-mono font-bold text-gray-900">
-                {profile.passcode}
+                {profile.passcode === "••••" ? "•••• (Protected PIN)" : profile.passcode}
               </div>
               <div className="text-[11px] text-gray-400">For 1-tap fast elder sign-in</div>
             </div>

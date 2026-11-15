@@ -1,21 +1,22 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const claimSchema = z.object({
   action: z.literal("claim"),
   taskId: z.string().min(1),
-  caregiverName: z.string().min(1),
-  actorRole: z.enum(["caregiver", "family_manager", "owner", "read_only"]),
+  caregiverName: z.string().optional(),
+  careProfileId: z.string().optional(),
 });
 
 const handoffSchema = z.object({
   action: z.literal("handoff"),
   taskId: z.string().min(1),
-  fromCaregiver: z.string().min(1),
+  fromCaregiver: z.string().optional(),
   toCaregiver: z.string().min(1),
   note: z.string().min(1),
-  actorRole: z.enum(["caregiver", "family_manager", "owner", "read_only"]),
+  careProfileId: z.string().optional(),
 });
 
 const resolveSchema = z.object({
@@ -29,23 +30,38 @@ const resolveSchema = z.object({
     "handed_off",
   ]),
   note: z.string().min(1),
-  actorName: z.string().min(1),
-  actorRole: z.enum(["caregiver", "family_manager", "owner", "read_only"]),
+  actorName: z.string().optional(),
+  careProfileId: z.string().optional(),
 });
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
 
+    // Enforce server-side authorization: read_only members cannot claim, handoff, or resolve tasks
+    const authResult = await getActorFromSessionOrHeader(
+      request,
+      ["caregiver", "family_manager", "owner"],
+      body.careProfileId
+    );
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
+    const { actor } = authResult;
+
+    if (body.careProfileId && !guardianStore.verifyPatientAccess(actor.profileId, body.careProfileId)) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: Caregiver cannot access unrelated patient profile." },
+        { status: 403 }
+      );
+    }
+
     if (body.action === "claim") {
-      const { taskId, caregiverName, actorRole } = claimSchema.parse(body);
-      if (actorRole === "read_only") {
-        return NextResponse.json(
-          { success: false, error: "Read-only members cannot claim care tasks" },
-          { status: 403 }
-        );
-      }
-      const task = guardianStore.claimTask(taskId, caregiverName);
+      const { taskId, caregiverName } = claimSchema.parse(body);
+      const claimer = caregiverName || actor.memberName;
+      const task = guardianStore.claimTask(taskId, claimer);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }
@@ -53,14 +69,9 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "handoff") {
-      const { taskId, fromCaregiver, toCaregiver, note, actorRole } = handoffSchema.parse(body);
-      if (actorRole === "read_only") {
-        return NextResponse.json(
-          { success: false, error: "Read-only members cannot hand off care tasks" },
-          { status: 403 }
-        );
-      }
-      const task = guardianStore.handoffTask(taskId, fromCaregiver, toCaregiver, note);
+      const { taskId, fromCaregiver, toCaregiver, note } = handoffSchema.parse(body);
+      const assignor = fromCaregiver || actor.memberName;
+      const task = guardianStore.handoffTask(taskId, assignor, toCaregiver, note);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }
@@ -68,14 +79,9 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "resolve") {
-      const { taskId, outcome, note, actorName, actorRole } = resolveSchema.parse(body);
-      if (actorRole === "read_only") {
-        return NextResponse.json(
-          { success: false, error: "Read-only members cannot resolve care tasks" },
-          { status: 403 }
-        );
-      }
-      const task = guardianStore.resolveTask(taskId, outcome, note, actorName);
+      const { taskId, outcome, note, actorName } = resolveSchema.parse(body);
+      const resolver = actorName || actor.memberName;
+      const task = guardianStore.resolveTask(taskId, outcome, note, resolver);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }

@@ -373,6 +373,38 @@ class GuardianStore {
     return this.profile;
   }
 
+  /**
+   * Sanitized profile for public/client delivery.
+   * Strips raw senior 4-digit PIN to prevent credential exposure in API responses.
+   */
+  getSanitizedProfile(role?: UserRole) {
+    const isPrivileged = role === "owner" || role === "family_manager";
+    return {
+      id: this.profile.id,
+      displayName: this.profile.displayName,
+      age: this.profile.age,
+      initials: this.profile.initials,
+      avatarUrl: this.profile.avatarUrl,
+      conditions: this.profile.conditions,
+      notes: this.profile.notes,
+      passcode: "••••", // Redacted for security
+      passcodeMasked: "•••• (4-digit PIN active)",
+      circleInviteCode: isPrivileged ? this.profile.circleInviteCode : "••••••••",
+      timezone: this.profile.timezone,
+      locale: this.profile.locale,
+    };
+  }
+
+  /**
+   * Patient-level boundary verification.
+   * Ensures caregivers or circle members cannot access unrelated patient profiles.
+   */
+  verifyPatientAccess(actorProfileId?: string, targetProfileId?: string): boolean {
+    if (!targetProfileId) return true;
+    const currentId = actorProfileId || this.profile.id;
+    return currentId === targetProfileId;
+  }
+
   setLocale(locale: "en" | "hi") {
     this.profile.locale = locale;
   }

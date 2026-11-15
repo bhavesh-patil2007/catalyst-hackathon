@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const checkInSchema = z.object({
   occurrenceId: z.string().min(1),
@@ -12,10 +13,11 @@ const checkInSchema = z.object({
     "NOT_SURE",
     "PENDING",
   ]),
-  actorName: z.string().min(1),
-  actorRole: z.enum(["owner", "family_manager", "caregiver", "read_only"]),
+  actorName: z.string().optional(),
+  actorRole: z.enum(["owner", "family_manager", "caregiver", "read_only"]).optional(),
   note: z.string().optional(),
   doNotNotifyFamily: z.boolean().optional(),
+  careProfileId: z.string().optional(),
 });
 
 export async function POST(request: Request) {
@@ -23,9 +25,22 @@ export async function POST(request: Request) {
     const body = await request.json();
     const validated = checkInSchema.parse(body);
 
-    if (validated.actorRole === "read_only") {
+    // Enforce server-side authorization: read_only members cannot record check-ins
+    const authResult = await getActorFromSessionOrHeader(
+      request,
+      ["owner", "family_manager", "caregiver"],
+      validated.careProfileId
+    );
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
+    const { actor } = authResult;
+
+    if (validated.careProfileId && !guardianStore.verifyPatientAccess(actor.profileId, validated.careProfileId)) {
       return NextResponse.json(
-        { success: false, error: "Read-only members cannot record check-ins" },
+        { success: false, error: "Forbidden: Caregiver cannot access unrelated patient profile." },
         { status: 403 }
       );
     }
@@ -33,8 +48,8 @@ export async function POST(request: Request) {
     const updated = guardianStore.recordCheckIn(
       validated.occurrenceId,
       validated.status,
-      validated.actorName,
-      validated.actorRole,
+      actor.memberName,
+      actor.role,
       validated.note,
       validated.doNotNotifyFamily
     );

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const createAppointmentSchema = z.object({
   doctorName: z.string().min(2),
@@ -14,6 +15,7 @@ const createAppointmentSchema = z.object({
   transportDetails: z.string().optional(),
   questionsToAsk: z.array(z.string()).default([]),
   postVisitNotes: z.string().optional(),
+  careProfileId: z.string().optional(),
 });
 
 export async function POST(request: Request) {
@@ -21,8 +23,38 @@ export async function POST(request: Request) {
     const body = await request.json();
     const validated = createAppointmentSchema.parse(body);
 
+    // Enforce server-side authorization: read_only members cannot schedule appointments
+    const authResult = await getActorFromSessionOrHeader(
+      request,
+      ["owner", "family_manager", "caregiver"],
+      validated.careProfileId
+    );
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
+    const { actor } = authResult;
+
+    if (validated.careProfileId && !guardianStore.verifyPatientAccess(actor.profileId, validated.careProfileId)) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: Caregiver cannot access unrelated patient profile." },
+        { status: 403 }
+      );
+    }
+
     const newAppt = guardianStore.addAppointment({
-      ...validated,
+      doctorName: validated.doctorName,
+      specialty: validated.specialty,
+      clinicName: validated.clinicName,
+      address: validated.address,
+      dateTime: validated.dateTime,
+      dateLabel: validated.dateLabel,
+      timeLabel: validated.timeLabel,
+      transportAssigned: validated.transportAssigned,
+      transportDetails: validated.transportDetails,
+      questionsToAsk: validated.questionsToAsk,
+      postVisitNotes: validated.postVisitNotes,
       status: "UPCOMING",
     });
 
