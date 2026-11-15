@@ -1,4 +1,5 @@
 import { Pool, QueryResult, QueryResultRow } from "pg";
+import { getSupabaseServerClient, isSupabaseConfigured } from "../supabase/server";
 
 let pool: Pool | null = null;
 
@@ -40,30 +41,81 @@ export async function query<R extends QueryResultRow = any>(
 export async function checkDatabaseHealth(): Promise<{
   connected: boolean;
   latencyMs?: number;
-  engine: "postgresql" | "in-memory";
+  engine: "supabase" | "postgresql" | "in-memory" | "unconfigured";
   error?: string;
 }> {
+  const start = Date.now();
+
+  // 1. Supabase Check (Primary production client)
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabaseServerClient();
+      if (!supabase) {
+        return {
+          connected: false,
+          engine: "supabase",
+          error: "Supabase client initialization failed",
+        };
+      }
+      const { error } = await supabase
+        .from("care_profiles")
+        .select("id", { count: "exact", head: true });
+
+      if (error) {
+        return {
+          connected: false,
+          latencyMs: Date.now() - start,
+          engine: "supabase",
+          error: error.message,
+        };
+      }
+
+      return {
+        connected: true,
+        latencyMs: Date.now() - start,
+        engine: "supabase",
+      };
+    } catch (err: any) {
+      return {
+        connected: false,
+        latencyMs: Date.now() - start,
+        engine: "supabase",
+        error: err?.message || "Supabase connection error",
+      };
+    }
+  }
+
+  // 2. Direct PostgreSQL Check (if DATABASE_URL is configured)
   const p = getDatabasePool();
-  if (!p) {
+  if (p) {
+    try {
+      await p.query("SELECT 1;");
+      return {
+        connected: true,
+        latencyMs: Date.now() - start,
+        engine: "postgresql",
+      };
+    } catch (err: any) {
+      return {
+        connected: false,
+        latencyMs: Date.now() - start,
+        engine: "postgresql",
+        error: err?.message || "PostgreSQL health check query failed",
+      };
+    }
+  }
+
+  // 3. Fallback: In-memory mode (permitted only in development and test)
+  if (process.env.NODE_ENV === "production") {
     return {
-      connected: true,
-      engine: "in-memory",
+      connected: false,
+      engine: "unconfigured",
+      error: "No persistent database configured. SUPABASE_URL or DATABASE_URL required in production.",
     };
   }
 
-  const start = Date.now();
-  try {
-    await p.query("SELECT 1;");
-    return {
-      connected: true,
-      latencyMs: Date.now() - start,
-      engine: "postgresql",
-    };
-  } catch (err: any) {
-    return {
-      connected: false,
-      engine: "postgresql",
-      error: err?.message || "Database health check query failed",
-    };
-  }
+  return {
+    connected: true,
+    engine: "in-memory",
+  };
 }

@@ -14,6 +14,7 @@ import { guardianStore } from "@/lib/store";
 import { addCheckIn, getHistory, CheckInRecord } from "@/lib/wellbeingStore";
 import { getDatabasePool, query } from "./index";
 import { getSupabaseServerClient, isSupabaseConfigured } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type TaskOutcome =
   | "spoke_with_elder"
@@ -24,7 +25,7 @@ export type TaskOutcome =
 
 export interface CareRepository {
   getProfile(profileId?: string): Promise<CareProfile>;
-  getSanitizedProfile(role?: UserRole): Promise<Omit<CareProfile, "passcode" | "circleInviteCode"> & { passcode?: string; circleInviteCode?: string }>;
+  getSanitizedProfile(role?: UserRole, profileId?: string): Promise<Omit<CareProfile, "passcode" | "circleInviteCode"> & { passcode?: string; circleInviteCode?: string }>;
   getMembers(profileId?: string): Promise<CareMember[]>;
   getMedications(profileId?: string): Promise<Medication[]>;
   getMedicationVersions(medicationId?: string): Promise<MedicationVersion[]>;
@@ -83,28 +84,65 @@ export function isPersistentDbConfigured(): boolean {
 /**
  * Ensures production runtime does not silently operate without a persistent database.
  */
-export function assertPersistenceRequirements(): void {
-  if (process.env.NODE_ENV === "production" && !isPersistentDbConfigured()) {
+export function assertPersistenceRequirements(clientOverride?: any): void {
+  if (process.env.NODE_ENV === "production" && !clientOverride && !isPersistentDbConfigured()) {
     throw new Error(
       "FATAL: Production database connection (SUPABASE_URL or DATABASE_URL) is required. In-memory demo storage is strictly prohibited in production."
     );
   }
 }
 
+function mapCareTask(r: any): CareTask {
+  return {
+    id: r.id,
+    careProfileId: r.care_profile_id,
+    sourceOccurrenceId: r.source_occurrence_id,
+    medicationName: r.medication_name,
+    doseText: r.dose_text,
+    scheduledTime: r.scheduled_time,
+    graceMinutesExpired: r.grace_minutes_expired || 30,
+    assignedToName: r.assigned_to_name,
+    assignedToRole: r.assigned_to_role || "caregiver",
+    assignedToEmail: r.assigned_to_email,
+    status: r.status,
+    claimedBy: r.claimed_by || undefined,
+    claimedAt: r.claimed_at || undefined,
+    resolutionOutcome: r.resolution_outcome || undefined,
+    resolutionNote: r.resolution_note || undefined,
+    resolvedAt: r.resolved_at || undefined,
+    handedOffTo: r.handed_off_to || undefined,
+    priority: r.priority || "HIGH",
+    createdAt: r.created_at || new Date().toISOString(),
+  };
+}
+
 /**
  * Persistent Database Implementation of CareRepository (Supabase / PostgreSQL).
  * Reads and writes through PostgreSQL/Supabase tables with referential integrity.
+ * Supports dependency injection for testing.
  */
-class PersistentCareRepository implements CareRepository {
-  async getProfile(): Promise<CareProfile> {
-    assertPersistenceRequirements();
-    const supabase = getSupabaseServerClient();
+export class PersistentCareRepository implements CareRepository {
+  private clientOverride?: SupabaseClient;
+
+  constructor(clientOverride?: SupabaseClient) {
+    this.clientOverride = clientOverride;
+  }
+
+  private getClient(): SupabaseClient | null {
+    return this.clientOverride || getSupabaseServerClient();
+  }
+
+  async getProfile(profileId?: string): Promise<CareProfile> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
     if (supabase) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("care_profiles")
-        .select("id, display_name, age, initials, conditions, vital_notes, household_code, timezone, locale")
-        .limit(1)
-        .single();
+        .select("id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale");
+      if (profileId) {
+        q = q.eq("id", profileId);
+      }
+      const { data, error } = await q.limit(1).maybeSingle();
 
       if (!error && data) {
         return {
@@ -120,135 +158,234 @@ class PersistentCareRepository implements CareRepository {
           locale: (data.locale as "en" | "hi") || "en",
         };
       }
-    }
 
-    const res = await query(
-      "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles LIMIT 1;"
-    );
-    if (!res || res.rows.length === 0) {
-      return guardianStore.getProfile();
-    }
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      displayName: row.display_name,
-      age: row.age,
-      initials: row.initials,
-      conditions: row.conditions || [],
-      notes: row.vital_notes || [],
-      passcode: "••••",
-      circleInviteCode: "•••••••••",
-      timezone: row.timezone || "America/New_York",
-      locale: row.locale || "en",
-    };
-  }
-
-  async getSanitizedProfile(role?: UserRole) {
-    return guardianStore.getSanitizedProfile(role);
-  }
-
-  async getMembers(): Promise<CareMember[]> {
-    assertPersistenceRequirements();
-    const supabase = getSupabaseServerClient();
-    if (supabase) {
-      const { data, error } = await supabase
-        .from("care_members")
-        .select("id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status");
-
-      if (!error && data && data.length > 0) {
-        return data.map((r) => ({
-          id: r.id,
-          careProfileId: r.care_profile_id,
-          name: r.name,
-          email: r.email,
-          role: r.role,
-          relationship: r.relationship,
-          phone: r.phone,
-          isPrimaryCaregiver: r.is_primary_caregiver,
-          status: r.status,
-        }));
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to load care profile from persistent database: ${error.message}`);
       }
     }
 
     const res = await query(
-      "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members;"
+      profileId
+        ? "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles WHERE id = $1 LIMIT 1;"
+        : "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles LIMIT 1;",
+      profileId ? [profileId] : []
     );
-    if (!res || res.rows.length === 0) {
-      return guardianStore.getMembers();
+    if (res && res.rows.length > 0) {
+      const row = res.rows[0];
+      return {
+        id: row.id,
+        displayName: row.display_name,
+        age: row.age,
+        initials: row.initials,
+        conditions: row.conditions || [],
+        notes: row.vital_notes || [],
+        passcode: "••••",
+        circleInviteCode: "•••••••••",
+        timezone: row.timezone || "America/New_York",
+        locale: row.locale || "en",
+      };
     }
-    return res.rows.map((r) => ({
-      id: r.id,
-      careProfileId: r.care_profile_id || guardianStore.getProfile().id,
-      name: r.name,
-      email: r.email,
-      role: r.role,
-      relationship: r.relationship,
-      phone: r.phone,
-      isPrimaryCaregiver: r.is_primary_caregiver,
-      status: r.status,
-    }));
+
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Care profile not found in persistent database. Run migrations or initial seeding.");
+    }
+
+    return guardianStore.getProfile();
   }
 
-  async getMedications(): Promise<Medication[]> {
-    assertPersistenceRequirements();
-    const supabase = getSupabaseServerClient();
+  async getSanitizedProfile(role?: UserRole, profileId?: string) {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
     if (supabase) {
-      const { data, error } = await supabase
+      let q = supabase
+        .from("care_profiles")
+        .select("id, display_name, age, initials, conditions, vital_notes, household_code, timezone, locale");
+      if (profileId) {
+        q = q.eq("id", profileId);
+      }
+      const { data, error } = await q.limit(1).maybeSingle();
+
+      if (!error && data) {
+        const base = {
+          id: data.id,
+          displayName: data.display_name,
+          age: data.age,
+          initials: data.initials,
+          conditions: data.conditions || [],
+          notes: data.vital_notes || [],
+          timezone: data.timezone || "America/New_York",
+          locale: (data.locale as "en" | "hi") || "en",
+        };
+
+        if (role === "family_manager") {
+          return {
+            ...base,
+            circleInviteCode: data.household_code || "OASIS-7629",
+          };
+        }
+
+        if (role === "owner") {
+          return {
+            ...base,
+            passcode: "1234",
+          };
+        }
+
+        return base;
+      }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Care profile not found in persistent database.");
+    }
+
+    return guardianStore.getSanitizedProfile(role);
+  }
+
+  async getMembers(profileId?: string): Promise<CareMember[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      let q = supabase
+        .from("care_members")
+        .select("id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status");
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+      const { data, error } = await q;
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            careProfileId: r.care_profile_id,
+            name: r.name,
+            email: r.email,
+            role: r.role,
+            relationship: r.relationship,
+            phone: r.phone,
+            isPrimaryCaregiver: r.is_primary_caregiver,
+            status: r.status,
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query care members from database: ${error.message}`);
+      }
+    }
+
+    const res = await query(
+      profileId
+        ? "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members WHERE care_profile_id = $1;"
+        : "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members;",
+      profileId ? [profileId] : []
+    );
+    if (res && res.rows.length > 0) {
+      return res.rows.map((r) => ({
+        id: r.id,
+        careProfileId: r.care_profile_id,
+        name: r.name,
+        email: r.email,
+        role: r.role,
+        relationship: r.relationship,
+        phone: r.phone,
+        isPrimaryCaregiver: r.is_primary_caregiver,
+        status: r.status,
+      }));
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
+    return guardianStore.getMembers();
+  }
+
+  async getMedications(profileId?: string): Promise<Medication[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      let q = supabase
         .from("medications")
         .select("id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by")
         .eq("active", true);
 
-      if (!error && data && data.length > 0) {
-        return data.map((r) => ({
-          id: r.id,
-          careProfileId: r.care_profile_id,
-          name: r.name,
-          dosage: r.dosage,
-          instructions: r.instructions,
-          pillColor: r.pill_color,
-          pillShape: r.pill_shape,
-          active: r.active,
-          currentVersion: r.current_version,
-          remainingQuantity: r.remaining_quantity,
-          refillThreshold: r.refill_threshold,
-          scheduleTime: r.schedule_time,
-          slot: r.slot,
-          dailyFrequency: r.daily_frequency || 1,
-          foodRequirement: r.food_requirement || "With food",
-          prescribedBy: r.prescribed_by || "Dr. Robert Vance",
-        }));
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+
+      const { data, error } = await q;
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            careProfileId: r.care_profile_id,
+            name: r.name,
+            dosage: r.dosage,
+            instructions: r.instructions,
+            pillColor: r.pill_color,
+            pillShape: r.pill_shape,
+            active: r.active,
+            currentVersion: r.current_version,
+            remainingQuantity: r.remaining_quantity,
+            refillThreshold: r.refill_threshold,
+            scheduleTime: r.schedule_time,
+            slot: r.slot,
+            dailyFrequency: r.daily_frequency || 1,
+            foodRequirement: r.food_requirement || "With food",
+            prescribedBy: r.prescribed_by || "Dr. Robert Vance",
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query medications: ${error.message}`);
       }
     }
 
     const res = await query(
-      "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by FROM medications WHERE active = true;"
+      profileId
+        ? "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by FROM medications WHERE active = true AND care_profile_id = $1;"
+        : "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by FROM medications WHERE active = true;",
+      profileId ? [profileId] : []
     );
-    if (!res || res.rows.length === 0) {
-      return guardianStore.getMedications();
+    if (res && res.rows.length > 0) {
+      return res.rows.map((r) => ({
+        id: r.id,
+        careProfileId: r.care_profile_id,
+        name: r.name,
+        dosage: r.dosage,
+        instructions: r.instructions,
+        pillColor: r.pill_color,
+        pillShape: r.pill_shape,
+        active: r.active,
+        currentVersion: r.current_version,
+        remainingQuantity: r.remaining_quantity,
+        refillThreshold: r.refill_threshold,
+        scheduleTime: r.schedule_time,
+        slot: r.slot,
+        dailyFrequency: r.daily_frequency || 1,
+        foodRequirement: r.food_requirement || "With food",
+        prescribedBy: r.prescribed_by || "Dr. Robert Vance",
+      }));
     }
-    return res.rows.map((r) => ({
-      id: r.id,
-      careProfileId: r.care_profile_id || guardianStore.getProfile().id,
-      name: r.name,
-      dosage: r.dosage,
-      instructions: r.instructions,
-      pillColor: r.pill_color,
-      pillShape: r.pill_shape,
-      active: r.active,
-      currentVersion: r.current_version,
-      remainingQuantity: r.remaining_quantity,
-      refillThreshold: r.refill_threshold,
-      scheduleTime: r.schedule_time,
-      slot: r.slot,
-      dailyFrequency: r.daily_frequency || 1,
-      foodRequirement: r.food_requirement || "With food",
-      prescribedBy: r.prescribed_by || "Dr. Robert Vance",
-    }));
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
+    return guardianStore.getMedications();
   }
 
   async getMedicationVersions(medicationId?: string): Promise<MedicationVersion[]> {
-    assertPersistenceRequirements();
-    const supabase = getSupabaseServerClient();
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
     if (supabase) {
       let q = supabase
         .from("medication_versions")
@@ -261,19 +398,27 @@ class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data && data.length > 0) {
-        return data.map((r) => ({
-          id: r.id,
-          medicationId: r.medication_id,
-          version: r.version,
-          labelName: r.label_name,
-          doseText: r.dose_text,
-          instructions: r.instructions,
-          effectiveFrom: r.effective_from,
-          createdBy: r.created_by,
-          reason: r.reason,
-          confirmedBy: r.confirmed_by,
-        }));
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            medicationId: r.medication_id,
+            version: r.version,
+            labelName: r.label_name,
+            doseText: r.dose_text,
+            instructions: r.instructions,
+            effectiveFrom: r.effective_from,
+            createdBy: r.created_by,
+            reason: r.reason,
+            confirmedBy: r.confirmed_by,
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query medication versions: ${error.message}`);
       }
     }
 
@@ -282,32 +427,68 @@ class PersistentCareRepository implements CareRepository {
       : "SELECT id, medication_id, version, label_name, dose_text, instructions, effective_from, created_by, reason, confirmed_by FROM medication_versions ORDER BY version DESC;";
     const params = medicationId ? [medicationId] : [];
     const res = await query(sql, params);
-    if (!res || res.rows.length === 0) {
-      return guardianStore.getMedicationVersions(medicationId);
+    if (res && res.rows.length > 0) {
+      return res.rows.map((r) => ({
+        id: r.id,
+        medicationId: r.medication_id,
+        version: r.version,
+        labelName: r.label_name,
+        doseText: r.dose_text,
+        instructions: r.instructions,
+        effectiveFrom: r.effective_from,
+        createdBy: r.created_by,
+        reason: r.reason,
+        confirmedBy: r.confirmed_by,
+      }));
     }
-    return res.rows.map((r) => ({
-      id: r.id,
-      medicationId: r.medication_id,
-      version: r.version,
-      labelName: r.label_name,
-      doseText: r.dose_text,
-      instructions: r.instructions,
-      effectiveFrom: r.effective_from,
-      createdBy: r.created_by,
-      reason: r.reason,
-      confirmedBy: r.confirmed_by,
-    }));
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
+    return guardianStore.getMedicationVersions(medicationId);
   }
 
-  async addMedicationWithVersion(params: any): Promise<Medication> {
-    assertPersistenceRequirements();
-    const med = guardianStore.addMedicationWithVersion(params);
-    const supabase = getSupabaseServerClient();
+  async addMedicationWithVersion(params: {
+    name: string;
+    dosage: string;
+    instructions: string;
+    scheduleTime: string;
+    slot: "morning" | "afternoon" | "evening" | "bedtime";
+    pillColor: string;
+    pillShape: "round" | "capsule" | "oval" | "liquid";
+    reason: string;
+    authorName: string;
+  }): Promise<Medication> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const profile = await this.getProfile();
+    const medId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const occId = crypto.randomUUID();
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const med: Medication = {
+      id: medId,
+      careProfileId: profile.id,
+      name: params.name,
+      dosage: params.dosage,
+      instructions: params.instructions,
+      pillColor: params.pillColor,
+      pillShape: params.pillShape,
+      active: true,
+      currentVersion: 1,
+      remainingQuantity: 30,
+      dailyFrequency: 1,
+      refillThreshold: 7,
+      scheduleTime: params.scheduleTime,
+      slot: params.slot,
+    };
 
     if (supabase) {
-      await supabase.from("medications").insert({
+      const { error: medErr } = await supabase.from("medications").insert({
         id: med.id,
-        care_profile_id: guardianStore.getProfile().id,
+        care_profile_id: profile.id,
         name: med.name,
         dosage: med.dosage,
         instructions: med.instructions,
@@ -315,88 +496,238 @@ class PersistentCareRepository implements CareRepository {
         pill_shape: med.pillShape,
         schedule_time: med.scheduleTime,
         slot: med.slot,
-        current_version: med.currentVersion,
-        remaining_quantity: med.remainingQuantity,
-        refill_threshold: med.refillThreshold,
+        current_version: 1,
+        remaining_quantity: 30,
+        refill_threshold: 7,
+        daily_frequency: 1,
+        food_requirement: "With food",
+        prescribed_by: "Dr. Robert Vance",
+        active: true,
       });
 
-      await supabase.from("medication_versions").insert({
+      if (medErr) {
+        throw new Error(`Failed to insert medication: ${medErr.message}`);
+      }
+
+      const { error: verErr } = await supabase.from("medication_versions").insert({
+        id: versionId,
         medication_id: med.id,
-        version: med.currentVersion,
+        version: 1,
         label_name: med.name,
         dose_text: med.dosage,
         instructions: med.instructions,
-        effective_from: new Date().toISOString().slice(0, 10),
+        effective_from: todayIso,
         created_by: params.authorName,
         reason: params.reason,
       });
+
+      if (verErr) {
+        throw new Error(`Failed to insert medication version: ${verErr.message}`);
+      }
+
+      // Create initial dose occurrence
+      await supabase.from("dose_occurrences").insert({
+        id: occId,
+        care_profile_id: profile.id,
+        medication_id: med.id,
+        medication_name: med.name,
+        dose_text: med.dosage,
+        scheduled_for: `${todayIso}T08:00:00Z`,
+        scheduled_time_label: med.scheduleTime,
+        status: "SCHEDULED",
+        instructions: med.instructions,
+      });
+
       return med;
     }
 
-    try {
-      await query(
-        `INSERT INTO medications (id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, schedule_time, slot)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (id) DO NOTHING;`,
-        [
-          med.id,
-          guardianStore.getProfile().id,
-          med.name,
-          med.dosage,
-          med.instructions,
-          med.pillColor,
-          med.pillShape,
-          med.scheduleTime,
-          med.slot,
-        ]
-      );
-    } catch (e) {
-      console.warn("[PersistentCareRepository] Database write notice:", e);
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.addMedicationWithVersion(params);
     }
-    return med;
+
+    throw new Error("Persistent database connection is required to create medications.");
   }
 
-  async editMedicationWithVersion(params: any) {
-    assertPersistenceRequirements();
-    const result = guardianStore.editMedicationWithVersion(params);
-    if (result) {
-      const supabase = getSupabaseServerClient();
-      if (supabase) {
-        await supabase
-          .from("medications")
-          .update({
-            dosage: result.medication.dosage,
-            instructions: result.medication.instructions,
-            current_version: result.medication.currentVersion,
-          })
-          .eq("id", result.medication.id);
+  async editMedicationWithVersion(params: {
+    medicationId: string;
+    dosage?: string;
+    instructions?: string;
+    scheduleTime?: string;
+    slot?: "morning" | "afternoon" | "evening" | "bedtime";
+    reason: string;
+    authorName: string;
+  }): Promise<{ medication: Medication; version: MedicationVersion } | null> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const todayIso = new Date().toISOString().slice(0, 10);
 
-        await supabase.from("medication_versions").insert({
-          medication_id: result.medication.id,
-          version: result.version.version,
-          label_name: result.version.labelName,
-          dose_text: result.version.doseText,
-          instructions: result.version.instructions,
-          effective_from: result.version.effectiveFrom,
-          created_by: result.version.createdBy,
-          reason: result.version.reason,
-        });
-        return result;
+    if (supabase) {
+      const { data: currentMed, error: fetchErr } = await supabase
+        .from("medications")
+        .select("*")
+        .eq("id", params.medicationId)
+        .single();
+
+      if (fetchErr || !currentMed) {
+        if (process.env.NODE_ENV === "production") {
+          throw new Error(`Medication not found: ${params.medicationId}`);
+        }
+        return guardianStore.editMedicationWithVersion(params);
       }
 
-      try {
-        await query(
-          `UPDATE medications SET dosage = $1, instructions = $2, current_version = $3 WHERE id = $4;`,
-          [result.medication.dosage, result.medication.instructions, result.medication.currentVersion, result.medication.id]
-        );
-      } catch (e) {
-        console.warn("[PersistentCareRepository] Database update notice:", e);
+      const newVersion = (currentMed.current_version || 1) + 1;
+      const updatedDosage = params.dosage || currentMed.dosage;
+      const updatedInstructions = params.instructions || currentMed.instructions;
+      const updatedScheduleTime = params.scheduleTime || currentMed.schedule_time;
+      const updatedSlot = params.slot || currentMed.slot;
+
+      const { error: updateErr } = await supabase
+        .from("medications")
+        .update({
+          dosage: updatedDosage,
+          instructions: updatedInstructions,
+          schedule_time: updatedScheduleTime,
+          slot: updatedSlot,
+          current_version: newVersion,
+        })
+        .eq("id", params.medicationId);
+
+      if (updateErr) {
+        throw new Error(`Failed to update medication: ${updateErr.message}`);
       }
+
+      const versionId = crypto.randomUUID();
+      const { data: verData, error: verErr } = await supabase
+        .from("medication_versions")
+        .insert({
+          id: versionId,
+          medication_id: params.medicationId,
+          version: newVersion,
+          label_name: currentMed.name,
+          dose_text: updatedDosage,
+          instructions: updatedInstructions,
+          effective_from: todayIso,
+          created_by: params.authorName,
+          reason: params.reason,
+        })
+        .select()
+        .single();
+
+      if (verErr) {
+        throw new Error(`Failed to insert updated medication version: ${verErr.message}`);
+      }
+
+      const updatedMedication: Medication = {
+        id: currentMed.id,
+        careProfileId: currentMed.care_profile_id,
+        name: currentMed.name,
+        dosage: updatedDosage,
+        instructions: updatedInstructions,
+        pillColor: currentMed.pill_color,
+        pillShape: currentMed.pill_shape,
+        active: currentMed.active,
+        currentVersion: newVersion,
+        remainingQuantity: currentMed.remaining_quantity,
+        dailyFrequency: currentMed.daily_frequency || 1,
+        refillThreshold: currentMed.refill_threshold,
+        scheduleTime: updatedScheduleTime,
+        slot: updatedSlot,
+      };
+
+      const newMedVersion: MedicationVersion = {
+        id: verData?.id || versionId,
+        medicationId: params.medicationId,
+        version: newVersion,
+        labelName: currentMed.name,
+        doseText: updatedDosage,
+        instructions: updatedInstructions,
+        effectiveFrom: todayIso,
+        createdBy: params.authorName,
+        reason: params.reason,
+      };
+
+      return { medication: updatedMedication, version: newMedVersion };
     }
-    return result;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.editMedicationWithVersion(params);
+    }
+
+    throw new Error("Persistent database connection is required to edit medications.");
   }
 
-  async getOccurrences(): Promise<DoseOccurrence[]> {
+  async getOccurrences(profileId?: string): Promise<DoseOccurrence[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      let q = supabase
+        .from("dose_occurrences")
+        .select("id, medication_id, care_profile_id, medication_name, dose_text, scheduled_for, scheduled_time_label, status, instructions, silent_routine")
+        .order("scheduled_for", { ascending: true });
+
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+
+      const { data, error } = await q;
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          // Fetch check-ins
+          const occIds = data.map((d) => d.id);
+          const { data: checkins } = await supabase
+            .from("dose_checkins")
+            .select("id, occurrence_id, status, actor_name, actor_role, recorded_at, note, do_not_notify_family")
+            .in("occurrence_id", occIds)
+            .order("recorded_at", { ascending: false });
+
+          const checkInMap: Record<string, any> = {};
+          if (checkins) {
+            for (const c of checkins) {
+              if (!checkInMap[c.occurrence_id]) {
+                checkInMap[c.occurrence_id] = {
+                  id: c.id,
+                  occurrenceId: c.occurrence_id,
+                  status: c.status,
+                  actorName: c.actor_name,
+                  actorRole: c.actor_role,
+                  recordedAt: c.recorded_at,
+                  note: c.note,
+                  doNotNotifyFamily: c.do_not_notify_family,
+                };
+              }
+            }
+          }
+
+          return data.map((r) => ({
+            id: r.id,
+            medicationId: r.medication_id,
+            medicationName: r.medication_name || "Prescribed Medication",
+            doseText: r.dose_text || "1 unit",
+            scheduledTime: r.scheduled_time_label || "08:00 AM",
+            status: r.status,
+            instructions: r.instructions || "",
+            pillColor: "emerald",
+            pillShape: "capsule",
+            scheduledIso: r.scheduled_for,
+            updatedAt: r.scheduled_for || new Date().toISOString(),
+            silentRoutine: r.silent_routine || false,
+            checkIn: checkInMap[r.id],
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query dose occurrences: ${error.message}`);
+      }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
     return guardianStore.getOccurrences();
   }
 
@@ -408,185 +739,667 @@ class PersistentCareRepository implements CareRepository {
     note?: string,
     doNotNotifyFamily?: boolean
   ): Promise<DoseOccurrence | null> {
-    assertPersistenceRequirements();
-    const res = guardianStore.recordCheckIn(occurrenceId, status, actorName, actorRole, note, doNotNotifyFamily);
-    const supabase = getSupabaseServerClient();
-    if (supabase) {
-      await supabase
-        .from("dose_occurrences")
-        .update({ status })
-        .eq("id", occurrenceId);
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const nowIso = new Date().toISOString();
 
+    if (supabase) {
+      const { data: updatedOcc, error: updateErr } = await supabase
+        .from("dose_occurrences")
+        .update({
+          status,
+          updated_at: nowIso,
+          closed_at: status === "MARKED_TAKEN" || status === "SKIPPED" ? nowIso : null,
+        })
+        .eq("id", occurrenceId)
+        .select()
+        .single();
+
+      if (updateErr) {
+        throw new Error(`Failed to record dose check-in: ${updateErr.message}`);
+      }
+
+      const checkInId = crypto.randomUUID();
       await supabase.from("dose_checkins").insert({
+        id: checkInId,
         occurrence_id: occurrenceId,
         status,
+        actor_id: crypto.randomUUID(),
         actor_name: actorName,
         actor_role: actorRole,
-        note,
+        note: note || null,
         do_not_notify_family: doNotNotifyFamily || false,
+        recorded_at: nowIso,
       });
+
+      // Auto-resolve associated CareLoop tasks on MARKED_TAKEN
+      if (status === "MARKED_TAKEN") {
+        await supabase
+          .from("care_tasks")
+          .update({
+            status: "RESOLVED",
+            resolution_outcome: "self_resolved",
+            resolution_note: `Self-reported taken by ${actorName}`,
+            resolved_at: nowIso,
+          })
+          .eq("source_occurrence_id", occurrenceId)
+          .in("status", ["OPEN", "CLAIMED"]);
+      }
+
+      // Log audit event
+      const profile = await this.getProfile();
+      await this.logAuditEvent({
+        careProfileId: profile.id,
+        actorName,
+        actorRole,
+        action: `DOSE_${status}`,
+        entityType: "DOSE",
+        entityId: occurrenceId,
+        description: `${actorName} recorded status '${status}' for routine.${note ? ` Note: "${note}"` : ""}${doNotNotifyFamily ? " [Family notification silenced by elder request]" : ""}`,
+      });
+
+      return {
+        id: updatedOcc.id,
+        medicationId: updatedOcc.medication_id,
+        medicationName: updatedOcc.medication_name || "Prescribed Medication",
+        doseText: updatedOcc.dose_text || "1 unit",
+        scheduledTime: updatedOcc.scheduled_time_label || "08:00 AM",
+        status: updatedOcc.status,
+        instructions: updatedOcc.instructions || "",
+        pillColor: "emerald",
+        pillShape: "capsule",
+        scheduledIso: updatedOcc.scheduled_for,
+        updatedAt: nowIso,
+        silentRoutine: updatedOcc.silent_routine || false,
+        checkIn: {
+          id: checkInId,
+          occurrenceId,
+          status,
+          actorName,
+          actorRole,
+          recordedAt: nowIso,
+          note,
+          doNotNotifyFamily,
+        },
+      };
     }
-    return res;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.recordCheckIn(occurrenceId, status, actorName, actorRole, note, doNotNotifyFamily);
+    }
+
+    throw new Error("Persistent database connection required to record dose check-ins.");
   }
 
-  async getAppointments(): Promise<DoctorAppointment[]> {
+  async getAppointments(profileId?: string): Promise<DoctorAppointment[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      let q = supabase
+        .from("appointments")
+        .select("id, care_profile_id, doctor_name, specialty, clinic_name, address, starts_at, date_label, time_label, transport_assigned, transport_details, questions_to_ask, post_visit_notes, status")
+        .order("starts_at", { ascending: true });
+
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+
+      const { data, error } = await q;
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            careProfileId: r.care_profile_id,
+            doctorName: r.doctor_name,
+            specialty: r.specialty,
+            clinicName: r.clinic_name,
+            address: r.address,
+            dateTime: r.starts_at,
+            dateLabel: r.date_label,
+            timeLabel: r.time_label,
+            transportAssigned: r.transport_assigned,
+            transportDetails: r.transport_details,
+            questionsToAsk: r.questions_to_ask || [],
+            postVisitNotes: r.post_visit_notes,
+            status: r.status,
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query appointments: ${error.message}`);
+      }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
     return guardianStore.getAppointments();
   }
 
   async addAppointment(appt: Omit<DoctorAppointment, "id">): Promise<DoctorAppointment> {
-    assertPersistenceRequirements();
-    const res = guardianStore.addAppointment(appt);
-    const supabase = getSupabaseServerClient();
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const id = crypto.randomUUID();
+    const profile = await this.getProfile();
+
     if (supabase) {
-      await supabase.from("appointments").insert({
-        id: res.id,
-        care_profile_id: guardianStore.getProfile().id,
-        doctor_name: res.doctorName,
-        specialty: res.specialty,
-        clinic_name: res.clinicName,
-        address: res.address,
-        starts_at: res.dateTime,
-        date_label: res.dateLabel,
-        time_label: res.timeLabel,
-        transport_assigned: res.transportAssigned,
-        transport_details: res.transportDetails,
-        questions_to_ask: res.questionsToAsk,
-        post_visit_notes: res.postVisitNotes,
-        status: res.status,
-      });
+      const { data, error } = await supabase
+        .from("appointments")
+        .insert({
+          id,
+          care_profile_id: appt.careProfileId || profile.id,
+          doctor_name: appt.doctorName,
+          specialty: appt.specialty,
+          clinic_name: appt.clinicName,
+          address: appt.address,
+          starts_at: appt.dateTime || new Date().toISOString(),
+          date_label: appt.dateLabel,
+          time_label: appt.timeLabel,
+          transport_assigned: appt.transportAssigned || false,
+          transport_details: appt.transportDetails || null,
+          questions_to_ask: appt.questionsToAsk || [],
+          post_visit_notes: appt.postVisitNotes || null,
+          status: appt.status || "UPCOMING",
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to persist appointment: ${error.message}`);
+      }
+
+      return {
+        id: data.id,
+        careProfileId: data.care_profile_id,
+        doctorName: data.doctor_name,
+        specialty: data.specialty,
+        clinicName: data.clinic_name,
+        address: data.address,
+        dateTime: data.starts_at,
+        dateLabel: data.date_label,
+        timeLabel: data.time_label,
+        transportAssigned: data.transport_assigned,
+        transportDetails: data.transport_details,
+        questionsToAsk: data.questions_to_ask || [],
+        postVisitNotes: data.post_visit_notes,
+        status: data.status,
+      };
     }
-    return res;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.addAppointment(appt);
+    }
+
+    throw new Error("Persistent database connection required to add appointments.");
   }
 
-  async getTasks(): Promise<CareTask[]> {
+  async getTasks(profileId?: string): Promise<CareTask[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      let q = supabase
+        .from("care_tasks")
+        .select("id, care_profile_id, source_occurrence_id, medication_name, dose_text, scheduled_time, grace_minutes_expired, assigned_to_name, assigned_to_role, assigned_to_email, status, claimed_by, claimed_at, resolution_outcome, resolution_note, resolved_at, handed_off_to, priority, created_at")
+        .order("created_at", { ascending: false });
+
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+
+      const { data, error } = await q;
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map(mapCareTask);
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query care tasks: ${error.message}`);
+      }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
     return guardianStore.getTasks();
   }
 
   async claimTask(taskId: string, claimer: string): Promise<CareTask | null> {
-    assertPersistenceRequirements();
-    const task = guardianStore.claimTask(taskId, claimer);
-    const supabase = getSupabaseServerClient();
-    if (supabase && task) {
-      await supabase
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const nowIso = new Date().toISOString();
+
+    if (supabase) {
+      const { data, error } = await supabase
         .from("care_tasks")
         .update({
           status: "CLAIMED",
           claimed_by: claimer,
-          claimed_at: new Date().toISOString(),
+          claimed_at: nowIso,
         })
-        .eq("id", taskId);
+        .eq("id", taskId)
+        .eq("status", "OPEN")
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to claim task: ${error.message}`);
+      }
+
+      if (!data) return null;
+
+      const profile = await this.getProfile();
+      await this.logAuditEvent({
+        careProfileId: profile.id,
+        actorName: claimer,
+        actorRole: "caregiver",
+        action: "TASK_CLAIMED",
+        entityType: "TASK",
+        entityId: taskId,
+        description: `${claimer} took ownership of follow-up task #${taskId}.`,
+      });
+
+      return mapCareTask(data);
     }
-    return task;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.claimTask(taskId, claimer);
+    }
+
+    throw new Error("Persistent database connection required to claim tasks.");
   }
 
   async handoffTask(taskId: string, fromCaregiver: string, toCaregiver: string, note: string): Promise<CareTask | null> {
-    assertPersistenceRequirements();
-    const task = guardianStore.handoffTask(taskId, fromCaregiver, toCaregiver, note);
-    const supabase = getSupabaseServerClient();
-    if (supabase && task) {
-      await supabase
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+
+    if (supabase) {
+      const { data, error } = await supabase
         .from("care_tasks")
         .update({
           assigned_to_name: toCaregiver,
           handed_off_to: toCaregiver,
-          resolution_note: note,
+          resolution_note: `Handoff from ${fromCaregiver} to ${toCaregiver}: "${note}"`,
+          status: "CLAIMED",
         })
-        .eq("id", taskId);
+        .eq("id", taskId)
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to handoff task: ${error.message}`);
+      }
+
+      if (!data) return null;
+
+      const profile = await this.getProfile();
+      await this.logAuditEvent({
+        careProfileId: profile.id,
+        actorName: fromCaregiver,
+        actorRole: "caregiver",
+        action: "TASK_HANDOFF",
+        entityType: "TASK",
+        entityId: taskId,
+        description: `${fromCaregiver} handed off follow-up task #${taskId} to ${toCaregiver}. Handoff note: "${note}".`,
+      });
+
+      return mapCareTask(data);
     }
-    return task;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.handoffTask(taskId, fromCaregiver, toCaregiver, note);
+    }
+
+    throw new Error("Persistent database connection required to handoff tasks.");
   }
 
   async resolveTask(taskId: string, outcome: TaskOutcome, note: string, resolver: string): Promise<CareTask | null> {
-    assertPersistenceRequirements();
-    const task = guardianStore.resolveTask(taskId, outcome, note, resolver);
-    const supabase = getSupabaseServerClient();
-    if (supabase && task) {
-      await supabase
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const nowIso = new Date().toISOString();
+
+    if (supabase) {
+      const { data, error } = await supabase
         .from("care_tasks")
         .update({
           status: "RESOLVED",
           resolution_outcome: outcome,
           resolution_note: note,
-          resolved_at: new Date().toISOString(),
+          resolved_at: nowIso,
         })
-        .eq("id", taskId);
+        .eq("id", taskId)
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to resolve task: ${error.message}`);
+      }
+
+      if (!data) return null;
+
+      const profile = await this.getProfile();
+      await this.logAuditEvent({
+        careProfileId: profile.id,
+        actorName: resolver,
+        actorRole: "caregiver",
+        action: "TASK_RESOLVED",
+        entityType: "TASK",
+        entityId: taskId,
+        description: `${resolver} resolved follow-up task #${taskId}. Outcome: ${outcome}. Note: "${note}"`,
+      });
+
+      return mapCareTask(data);
     }
-    return task;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.resolveTask(taskId, outcome, note, resolver);
+    }
+
+    throw new Error("Persistent database connection required to resolve tasks.");
   }
 
   async escalateUnconfirmedDose(occurrenceId: string): Promise<CareTask | null> {
-    assertPersistenceRequirements();
-    const task = guardianStore.escalateUnconfirmedDose(occurrenceId);
-    const supabase = getSupabaseServerClient();
-    if (supabase && task) {
-      await supabase.from("care_tasks").insert({
-        id: task.id,
-        care_profile_id: task.careProfileId,
-        source_occurrence_id: task.sourceOccurrenceId,
-        medication_name: task.medicationName,
-        dose_text: task.doseText,
-        scheduled_time: task.scheduledTime,
-        grace_minutes_expired: task.graceMinutesExpired,
-        assigned_to_name: task.assignedToName,
-        assigned_to_email: task.assignedToEmail,
-        status: task.status,
-        priority: task.priority,
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+
+    if (supabase) {
+      // 1. Idempotency check: see if active task already exists
+      const { data: existing } = await supabase
+        .from("care_tasks")
+        .select("id")
+        .eq("source_occurrence_id", occurrenceId)
+        .in("status", ["OPEN", "CLAIMED"])
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        return null; // Idempotent: active task already open
+      }
+
+      // 2. Fetch occurrence details
+      const { data: occ } = await supabase
+        .from("dose_occurrences")
+        .select("id, care_profile_id, medication_name, dose_text, scheduled_time_label")
+        .eq("id", occurrenceId)
+        .maybeSingle();
+
+      // Update occurrence status
+      await supabase
+        .from("dose_occurrences")
+        .update({ status: "UNCONFIRMED", updated_at: new Date().toISOString() })
+        .eq("id", occurrenceId);
+
+      const profile = await this.getProfile();
+      const taskId = crypto.randomUUID();
+
+      const { data: inserted, error: insertErr } = await supabase
+        .from("care_tasks")
+        .insert({
+          id: taskId,
+          care_profile_id: occ?.care_profile_id || profile.id,
+          source_occurrence_id: occurrenceId,
+          medication_name: occ?.medication_name || "Scheduled Routine",
+          dose_text: occ?.dose_text || "Scheduled Dose",
+          scheduled_time: occ?.scheduled_time_label || "1:00 PM",
+          grace_minutes_expired: 30,
+          assigned_to_name: "Priya Sharma, RN",
+          assigned_to_email: "priya.caregiver@oasiscare.demo.local",
+          assigned_to_role: "caregiver",
+          status: "OPEN",
+          priority: "HIGH",
+        })
+        .select()
+        .single();
+
+      if (insertErr) {
+        if (insertErr.code === "23505") {
+          // Unique constraint violation (another concurrent runner created it)
+          return null;
+        }
+        throw new Error(`Failed to create escalation task: ${insertErr.message}`);
+      }
+
+      await this.logAuditEvent({
+        careProfileId: profile.id,
+        actorName: "CareLoop Engine",
+        actorRole: "system",
+        action: "ESCALATION_TRIGGERED",
+        entityType: "TASK",
+        entityId: taskId,
+        description: `CareLoop escalated unconfirmed dose of ${occ?.medication_name || "Routine"} to Caregiver Priya Sharma. Task #${taskId} opened.`,
       });
+
+      return mapCareTask(inserted);
     }
-    return task;
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.escalateUnconfirmedDose(occurrenceId);
+    }
+
+    throw new Error("Persistent database connection required to escalate unconfirmed doses.");
   }
 
   async createBackupRequest(params: { caregiverName: string; reason: string }): Promise<CareTask> {
-    assertPersistenceRequirements();
-    return guardianStore.createBackupRequest(params);
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const profile = await this.getProfile();
+
+    if (supabase) {
+      // Check for existing active backup request to enforce partial unique constraint idempotency
+      const { data: existing } = await supabase
+        .from("care_tasks")
+        .select("id, status")
+        .eq("care_profile_id", profile.id)
+        .eq("medication_name", "Caregiver Relief Coverage")
+        .in("status", ["OPEN", "CLAIMED"])
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        throw new Error("ACTIVE_BACKUP_EXISTS: An active caregiver relief coverage request is already pending.");
+      }
+
+      const taskId = crypto.randomUUID();
+      const { data: inserted, error } = await supabase
+        .from("care_tasks")
+        .insert({
+          id: taskId,
+          care_profile_id: profile.id,
+          source_occurrence_id: null,
+          medication_name: "Caregiver Relief Coverage",
+          dose_text: "Shift Relief",
+          scheduled_time: "Immediate",
+          grace_minutes_expired: 0,
+          assigned_to_name: "Care Circle (Family Manager)",
+          assigned_to_role: "family_manager",
+          assigned_to_email: "sarah.t@family.demo.local",
+          status: "OPEN",
+          priority: "URGENT",
+          resolution_note: `Backup requested by ${params.caregiverName}. Reason: "${params.reason}".`,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === "23505") {
+          throw new Error("ACTIVE_BACKUP_EXISTS: An active caregiver relief coverage request is already pending.");
+        }
+        throw new Error(`Failed to create backup request: ${error.message}`);
+      }
+
+      await this.logAuditEvent({
+        careProfileId: profile.id,
+        actorName: params.caregiverName,
+        actorRole: "caregiver",
+        action: "BACKUP_REQUESTED",
+        entityType: "TASK",
+        entityId: taskId,
+        description: `${params.caregiverName} requested urgent caregiver backup coverage. Reason: "${params.reason}".`,
+      });
+
+      return mapCareTask(inserted);
+    }
+
+    if (process.env.NODE_ENV !== "production") {
+      return guardianStore.createBackupRequest(params);
+    }
+
+    throw new Error("Persistent database connection required to create backup requests.");
   }
 
   async getNotifications(): Promise<NotificationJob[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("notification_jobs")
+        .select("id, dedupe_key, recipient_email, recipient_role, notification_type, subject, body_preview, status, provider_error, retry_count, sent_at")
+        .order("sent_at", { ascending: false });
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            dedupeKey: r.dedupe_key,
+            recipientEmail: r.recipient_email,
+            recipientRole: r.recipient_role,
+            type: r.notification_type as any,
+            subject: r.subject,
+            bodyPreview: r.body_preview,
+            status: r.status as any,
+            providerError: r.provider_error || undefined,
+            retryCount: r.retry_count || 0,
+            timestamp: r.sent_at || new Date().toISOString(),
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query notification jobs: ${error.message}`);
+      }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
     return guardianStore.getNotifications();
   }
 
   async sendNotification(job: NotificationJob): Promise<void> {
-    guardianStore.sendNotification(job);
-    const supabase = getSupabaseServerClient();
+    const supabase = this.getClient();
     if (supabase) {
-      await supabase.from("notification_jobs").insert({
-        id: job.id,
-        dedupe_key: job.dedupeKey,
-        recipient_email: job.recipientEmail,
-        recipient_role: job.recipientRole,
-        notification_type: job.type,
-        subject: job.subject,
-        body_preview: job.bodyPreview,
-        status: job.status,
-        provider_error: job.providerError,
-        retry_count: job.retryCount || 0,
-      });
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(job.id);
+      const rowId = isUuid ? job.id : crypto.randomUUID();
+
+      const { error } = await supabase.from("notification_jobs").upsert(
+        {
+          id: rowId,
+          dedupe_key: job.dedupeKey,
+          recipient_email: job.recipientEmail,
+          recipient_role: job.recipientRole,
+          notification_type: job.type,
+          subject: job.subject,
+          body_preview: job.bodyPreview,
+          status: job.status,
+          provider_error: job.providerError || null,
+          retry_count: job.retryCount || 0,
+        },
+        { onConflict: "dedupe_key" }
+      );
+
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to persist notification job: ${error.message}`);
+      }
+      return;
     }
+
+    guardianStore.sendNotification(job);
   }
 
-  async getAuditEvents(): Promise<AuditEvent[]> {
+  async getAuditEvents(profileId?: string): Promise<AuditEvent[]> {
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    if (supabase) {
+      let q = supabase
+        .from("audit_events")
+        .select("id, care_profile_id, actor_name, actor_role, action, entity_type, entity_id, description, occurred_at")
+        .order("occurred_at", { ascending: false });
+
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+
+      const { data, error } = await q;
+
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            careProfileId: r.care_profile_id,
+            actorName: r.actor_name,
+            actorRole: r.actor_role,
+            action: r.action,
+            entityType: r.entity_type as any,
+            entityId: r.entity_id,
+            description: r.description,
+            timestamp: r.occurred_at || new Date().toISOString(),
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query audit events: ${error.message}`);
+      }
+    }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
     return guardianStore.getAuditEvents();
   }
 
   async logAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): Promise<void> {
-    const full = guardianStore.addAuditEvent(event);
-    const supabase = getSupabaseServerClient();
+    const supabase = this.getClient();
     if (supabase) {
-      await supabase.from("audit_events").insert({
-        care_profile_id: guardianStore.getProfile().id,
-        actor_name: full.actorName,
-        actor_role: full.actorRole,
-        action: full.action,
-        entity_type: full.entityType,
-        entity_id: full.entityId,
-        description: full.description,
+      const profile = await this.getProfile();
+      const { error } = await supabase.from("audit_events").insert({
+        id: crypto.randomUUID(),
+        care_profile_id: event.careProfileId || profile.id,
+        actor_name: event.actorName,
+        actor_role: event.actorRole,
+        action: event.action,
+        entity_type: event.entityType,
+        entity_id: event.entityId,
+        description: event.description,
       });
+
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to persist audit event: ${error.message}`);
+      }
+      return;
     }
+
+    guardianStore.addAuditEvent(event);
   }
 
   async getWellbeingHistory(caregiverId: string): Promise<CheckInRecord[]> {
-    assertPersistenceRequirements();
-    const supabase = getSupabaseServerClient();
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
     if (supabase) {
       const { data, error } = await supabase
         .from("caregiver_wellbeing")
@@ -594,42 +1407,81 @@ class PersistentCareRepository implements CareRepository {
         .eq("caregiver_id", caregiverId)
         .order("recorded_at", { ascending: true });
 
-      if (!error && data && data.length > 0) {
-        return data.map((r) => ({
-          id: r.id,
-          caregiverId: r.caregiver_id,
-          date: r.recorded_at.slice(0, 10),
-          timestamp: r.recorded_at,
-          sleepHours: Number(r.sleep_hours),
-          mood: r.mood,
-          stress: r.stress,
-          energy: r.energy,
-          note: r.note,
-          shareWithFamily: r.share_with_family,
-        }));
+      if (!error && data) {
+        if (data.length === 0 && process.env.NODE_ENV === "production") {
+          return [];
+        }
+        if (data.length > 0) {
+          return data.map((r) => ({
+            id: r.id,
+            caregiverId: r.caregiver_id,
+            date: r.recorded_at.slice(0, 10),
+            timestamp: r.recorded_at,
+            sleepHours: Number(r.sleep_hours),
+            mood: r.mood,
+            stress: r.stress,
+            energy: r.energy,
+            note: r.note,
+            shareWithFamily: r.share_with_family,
+          }));
+        }
+      }
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to query wellbeing history: ${error.message}`);
       }
     }
+
+    if (process.env.NODE_ENV === "production") {
+      return [];
+    }
+
     return getHistory(caregiverId);
   }
 
   async addWellbeingCheckIn(data: Omit<CheckInRecord, "id" | "date" | "timestamp">): Promise<CheckInRecord> {
-    assertPersistenceRequirements();
-    const checkin = addCheckIn(data);
-    const supabase = getSupabaseServerClient();
+    assertPersistenceRequirements(this.clientOverride);
+    const supabase = this.getClient();
+    const nowIso = new Date().toISOString();
+    const id = crypto.randomUUID();
+
     if (supabase) {
-      await supabase.from("caregiver_wellbeing").insert({
-        id: checkin.id,
-        care_profile_id: guardianStore.getProfile().id,
-        caregiver_id: checkin.caregiverId,
-        sleep_hours: checkin.sleepHours,
-        mood: checkin.mood,
-        stress: checkin.stress,
-        energy: checkin.energy,
-        note: checkin.note,
-        share_with_family: checkin.shareWithFamily,
+      const profile = await this.getProfile();
+      const { error } = await supabase.from("caregiver_wellbeing").insert({
+        id,
+        care_profile_id: profile.id,
+        caregiver_id: data.caregiverId,
+        sleep_hours: data.sleepHours,
+        mood: data.mood,
+        stress: data.stress,
+        energy: data.energy,
+        note: data.note || null,
+        share_with_family: data.shareWithFamily || false,
+        recorded_at: nowIso,
       });
+
+      if (error && process.env.NODE_ENV === "production") {
+        throw new Error(`Failed to record wellbeing check-in: ${error.message}`);
+      }
+
+      return {
+        id,
+        caregiverId: data.caregiverId,
+        date: nowIso.slice(0, 10),
+        timestamp: nowIso,
+        sleepHours: data.sleepHours,
+        mood: data.mood,
+        stress: data.stress,
+        energy: data.energy,
+        note: data.note,
+        shareWithFamily: data.shareWithFamily,
+      };
     }
-    return checkin;
+
+    if (process.env.NODE_ENV !== "production") {
+      return addCheckIn(data);
+    }
+
+    throw new Error("Persistent database connection required to record wellbeing check-ins.");
   }
 }
 
@@ -637,7 +1489,7 @@ class PersistentCareRepository implements CareRepository {
  * Local / Test In-Memory Implementation.
  * Used during local development and testing when DATABASE_URL or SUPABASE_URL is not set.
  */
-class InMemoryCareRepository implements CareRepository {
+export class InMemoryCareRepository implements CareRepository {
   async getProfile(): Promise<CareProfile> {
     return guardianStore.getProfile();
   }

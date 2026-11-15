@@ -7,9 +7,12 @@ export async function GET() {
     process.env.IRON_SESSION_SECRET !== "guardian-oasis-dev-secret-change-in-production-32";
 
   const dbHealth = await checkDatabaseHealth();
+  const isHealthy =
+    dbHealth.connected &&
+    (process.env.NODE_ENV !== "production" || dbHealth.engine !== "in-memory");
 
   return NextResponse.json({
-    status: dbHealth.connected ? "healthy" : "degraded",
+    status: isHealthy ? "healthy" : "degraded",
     service: "guardian-oasis",
     version: "1.0.0",
     uptimeSeconds: Math.floor(process.uptime()),

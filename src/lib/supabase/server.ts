@@ -1,3 +1,6 @@
+if (typeof window !== "undefined") {
+  throw new Error("This module can only be loaded on the server.");
+}
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 let serverSupabaseClient: SupabaseClient | null = null;

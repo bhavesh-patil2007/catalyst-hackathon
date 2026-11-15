@@ -2,38 +2,10 @@ import { NextResponse } from "next/server";
 import { careRepository } from "@/lib/db/repository";
 import { dispatchProactiveEmail } from "@/lib/notificationService";
 import { DoseOccurrence } from "@/types";
+import { getAuthoritativeDoseDate } from "@/lib/dateUtils";
 
 const GRACE_PERIOD_MS = 30 * 60 * 1000; // 30 minutes grace period
 const UPCOMING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes before dose
-
-/**
- * Derives the exact scheduled timestamp for a dose occurrence.
- * Prefers ISO timestamp (scheduledIso), with timezone-aware fallback.
- */
-function getDoseScheduledDate(dose: DoseOccurrence, timezone: string = "America/New_York"): Date {
-  if (dose.scheduledIso) {
-    const parsed = new Date(dose.scheduledIso);
-    if (!isNaN(parsed.getTime())) {
-      return parsed;
-    }
-  }
-
-  // Fallback: parse time string (e.g., "08:00 AM", "01:00 PM") against today
-  const match = dose.scheduledTime?.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  const now = new Date();
-  if (!match) return now;
-
-  let hours = parseInt(match[1], 10);
-  const minutes = parseInt(match[2], 10);
-  const meridiem = match[3]?.toUpperCase();
-
-  if (meridiem === "PM" && hours < 12) hours += 12;
-  if (meridiem === "AM" && hours === 12) hours = 0;
-
-  const target = new Date(now);
-  target.setHours(hours, minutes, 0, 0);
-  return target;
-}
 
 export async function POST(request: Request) {
   try {
@@ -84,7 +56,11 @@ export async function POST(request: Request) {
     for (const dose of occurrences) {
       if (dose.status !== "SCHEDULED") continue;
 
-      const scheduledDate = getDoseScheduledDate(dose, profile.timezone);
+      const scheduledDate = getAuthoritativeDoseDate(dose, todayIso, profile.timezone);
+      if (!scheduledDate) {
+        console.warn(`[Watchdog] Skipping dose ${dose.id}: invalid or unparseable scheduled date.`);
+        continue;
+      }
       const diffMs = scheduledDate.getTime() - now.getTime();
 
       // Check if scheduled time falls within the upcoming reminder window (0 to 30 min from now)
@@ -130,7 +106,11 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const scheduledDate = getDoseScheduledDate(dose, profile.timezone);
+      const scheduledDate = getAuthoritativeDoseDate(dose, todayIso, profile.timezone);
+      if (!scheduledDate) {
+        console.warn(`[Watchdog] Skipping dose ${dose.id}: invalid scheduled date for escalation.`);
+        continue;
+      }
       const overdueMs = now.getTime() - scheduledDate.getTime();
 
       // Eligible only if current time is past scheduled time + configured grace period

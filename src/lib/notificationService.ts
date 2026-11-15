@@ -1,4 +1,4 @@
-import { guardianStore } from "@/lib/store";
+import { careRepository } from "@/lib/db/repository";
 import { NotificationJob } from "@/types";
 import { Resend } from "resend";
 
@@ -48,7 +48,7 @@ export async function dispatchProactiveEmail(
   const timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   // 1. Durable Deduplication Check
-  const existingNotifications = guardianStore.getNotifications();
+  const existingNotifications = await careRepository.getNotifications();
   const isDuplicate = existingNotifications.some((n) => n.dedupeKey === options.dedupeKey);
   if (isDuplicate) {
     return {
@@ -76,7 +76,7 @@ export async function dispatchProactiveEmail(
       timestamp: timeString,
       providerError: "RESEND_API_KEY not configured. Set RESEND_API_KEY to enable live email dispatch.",
     };
-    guardianStore.sendNotification(job);
+    await careRepository.sendNotification(job);
 
     console.info(
       `[Notification:CONFIG_REQUIRED] To: ${maskEmail(options.recipientEmail)} | Subject: "${options.subject}"`
@@ -106,7 +106,7 @@ export async function dispatchProactiveEmail(
       timestamp: timeString,
       providerError: "Production EMAIL_FROM must be configured with a verified domain.",
     };
-    guardianStore.sendNotification(job);
+    await careRepository.sendNotification(job);
 
     return {
       dispatched: false,
@@ -163,11 +163,11 @@ export async function dispatchProactiveEmail(
       type: options.type,
       subject: options.subject,
       bodyPreview: options.bodyPreview,
-      status: "DELIVERED",
+      status: "ACCEPTED",
       timestamp: timeString,
       retryCount: attempts - 1,
     };
-    guardianStore.sendNotification(job);
+    await careRepository.sendNotification(job);
 
     console.info(
       `[Notification:ACCEPTED] To: ${maskEmail(options.recipientEmail)} | ProviderId: ${providerId} | Attempts: ${attempts}`
@@ -176,7 +176,7 @@ export async function dispatchProactiveEmail(
     return {
       dispatched: true,
       deduplicated: false,
-      status: "DELIVERED",
+      status: "ACCEPTED",
       providerMessageId: providerId,
       jobId,
     };
@@ -196,7 +196,7 @@ export async function dispatchProactiveEmail(
     retryCount: attempts,
     providerError: lastErrorMsg,
   };
-  guardianStore.sendNotification(failedJob);
+  await careRepository.sendNotification(failedJob);
 
   console.warn(
     `[Notification:FAILED] To: ${maskEmail(options.recipientEmail)} | Error: ${lastErrorMsg}`
