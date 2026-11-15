@@ -88,6 +88,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, data: task });
     }
 
+    if (body.action === "backup_request" || body.type === "BACKUP_REQUEST") {
+      const caregiverName = body.caregiverName || actor.memberName;
+      const reason = body.reason || "Caregiver wellbeing trend indicates elevated fatigue & workload";
+      const task = guardianStore.createBackupRequest({
+        caregiverName,
+        reason,
+      });
+      return NextResponse.json({ success: true, data: task });
+    }
+
     return NextResponse.json({ success: false, error: "Invalid action" }, { status: 400 });
   } catch (error) {
     if (error instanceof z.ZodError) {

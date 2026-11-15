@@ -664,6 +664,43 @@ class GuardianStore {
     return task;
   }
 
+  // Create CareLoop backup coverage request from Caregiver Wellbeing module
+  createBackupRequest(data: { caregiverName: string; reason: string }): CareTask {
+    const timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const newTask: CareTask = {
+      id: "task-backup-" + Date.now(),
+      careProfileId: this.profile.id,
+      sourceOccurrenceId: "backup-coverage",
+      medicationName: "Caregiver Relief Coverage",
+      doseText: "Shift Relief",
+      scheduledTime: "Immediate",
+      graceMinutesExpired: 0,
+      assignedToName: "Care Circle (Family Manager)",
+      assignedToRole: "family_manager",
+      assignedToEmail: "sarah.t@family.demo.local",
+      status: "OPEN",
+      priority: "URGENT",
+      createdAt: timeString,
+      resolutionNote: `Backup requested by ${data.caregiverName}. Reason: "${data.reason}".`,
+    };
+
+    this.tasks.unshift(newTask);
+
+    this.auditEvents.unshift({
+      id: "aud-" + Date.now(),
+      careProfileId: this.profile.id,
+      actorName: data.caregiverName,
+      actorRole: "caregiver",
+      action: "BACKUP_REQUESTED",
+      entityType: "TASK",
+      entityId: newTask.id,
+      description: `Caregiver ${data.caregiverName} initiated a CareLoop backup relief request. Reason: "${data.reason}".`,
+      timestamp: `Today at ${timeString}`,
+    });
+
+    return newTask;
+  }
+
   addMedicationWithVersion(data: {
     name: string;
     dosage: string;

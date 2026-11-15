@@ -1,12 +1,25 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Heart, CheckCircle, AlertTriangle, AlertCircle, Shield } from "lucide-react";
+import { Navbar } from "@/components/Navbar";
+import {
+  Heart,
+  CheckCircle,
+  AlertTriangle,
+  AlertCircle,
+  Shield,
+  Coffee,
+  Sparkles,
+  Users,
+  Activity,
+  Calendar,
+  Lock,
+  ArrowRight,
+} from "lucide-react";
 import type { WellbeingCheckIn } from "@/lib/wellbeingStore";
 
 const CAREGIVER_ID = "caregiver-priya";
 
-// ─── Emoji Selector ─────────────────────────────────────────────────────────
 interface EmojiSelectorProps {
   options: { emoji: string; label: string }[];
   value: number;
@@ -25,18 +38,12 @@ function EmojiSelector({ options, value, onChange, name }: EmojiSelectorProps) {
             key={val}
             type="button"
             onClick={() => onChange(val)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onChange(val);
-              }
-            }}
             aria-label={`${name}: ${opt.label}`}
             aria-pressed={isSelected}
-            className={`text-3xl p-2 rounded-xl transition-all focus:outline-none focus:ring-4 focus:ring-emerald-400 ${
+            className={`text-2xl p-2.5 rounded-2xl transition-all focus:outline-none focus:ring-2 focus:ring-emerald-400 ${
               isSelected
-                ? "ring-4 ring-emerald-500 bg-emerald-50 scale-110 shadow-md"
-                : "hover:bg-slate-100 opacity-60 hover:opacity-100"
+                ? "ring-2 ring-emerald-600 bg-emerald-50 scale-105 shadow-xs"
+                : "hover:bg-slate-100 opacity-60 hover:opacity-100 bg-gray-50/70"
             }`}
           >
             {opt.emoji}
@@ -47,151 +54,7 @@ function EmojiSelector({ options, value, onChange, name }: EmojiSelectorProps) {
   );
 }
 
-// ─── Toast ───────────────────────────────────────────────────────────────────
-function Toast({ message, type }: { message: string; type: "success" | "error" }) {
-  return (
-    <div
-      role="alert"
-      aria-live="assertive"
-      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-5 py-3 rounded-xl shadow-xl text-white text-sm font-medium transition-all ${
-        type === "success" ? "bg-emerald-600" : "bg-red-600"
-      }`}
-    >
-      {type === "success" ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
-      {message}
-    </div>
-  );
-}
-
-// ─── Trend Panel ─────────────────────────────────────────────────────────────
-interface TrendPanelProps {
-  history: WellbeingCheckIn[];
-  burnoutRisk: "low" | "moderate" | "high" | null;
-  onRequestBackup: () => void;
-  requesting: boolean;
-}
-
-function TrendPanel({ history, burnoutRisk, onRequestBackup, requesting }: TrendPanelProps) {
-  // Build last 7 days
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return d.toISOString().slice(0, 10);
-  });
-
-  const riskConfig = {
-    low: { label: "Low Risk", color: "bg-emerald-100 text-emerald-800 border-emerald-300", icon: <CheckCircle className="w-4 h-4" /> },
-    moderate: { label: "Monitor", color: "bg-amber-100 text-amber-800 border-amber-300", icon: <AlertTriangle className="w-4 h-4" /> },
-    high: { label: "High Risk — Consider requesting backup", color: "bg-red-100 text-red-800 border-red-300", icon: <AlertCircle className="w-4 h-4" /> },
-  };
-
-  function dotColor(avg: number | null) {
-    if (avg === null) return "bg-slate-200";
-    if (avg >= 3.5) return "bg-emerald-500";
-    if (avg >= 2.5) return "bg-amber-400";
-    return "bg-red-500";
-  }
-
-  return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 flex flex-col gap-5">
-      <h2 className="text-lg font-semibold text-[#2d4a3e] font-serif flex items-center gap-2">
-        <span>7-Day Wellbeing Trend</span>
-      </h2>
-
-      {/* Day columns */}
-      <div className="flex justify-between gap-1">
-        {days.map((date) => {
-          const entry = history.find((h) => h.date === date);
-          const avg = entry ? (entry.mood + entry.energy) / 2 : null;
-          const shortDate = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-          });
-          return (
-            <div key={date} className="flex flex-col items-center gap-2 flex-1" title={shortDate}>
-              <div
-                className={`w-5 h-5 rounded-full ${dotColor(avg)} border-2 border-white shadow`}
-                aria-label={`${shortDate}: ${avg !== null ? avg.toFixed(1) : "No data"}`}
-              />
-              <span className="text-[10px] text-slate-400 text-center leading-tight">
-                {new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" })}
-              </span>
-              {entry && (
-                <span className="text-[9px] text-slate-500">
-                  😴{entry.sleepHours}h
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Legend */}
-      <div className="flex gap-3 text-xs text-slate-500 flex-wrap">
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-500 inline-block" /> Good</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-400 inline-block" /> Monitor</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block" /> Low</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-slate-200 inline-block" /> No data</span>
-      </div>
-
-      {/* Burnout Risk Badge */}
-      {burnoutRisk && (
-        <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm font-medium ${riskConfig[burnoutRisk].color}`}>
-          {riskConfig[burnoutRisk].icon}
-          <span>{riskConfig[burnoutRisk].label}</span>
-        </div>
-      )}
-
-      {/* Request Backup button (only if high) */}
-      {burnoutRisk === "high" && (
-        <button
-          onClick={onRequestBackup}
-          disabled={requesting}
-          className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-xl transition-colors focus:outline-none focus:ring-4 focus:ring-red-300 disabled:opacity-60"
-        >
-          {requesting ? "Requesting…" : "Request Backup Caregiver"}
-        </button>
-      )}
-
-      {/* Consent notice */}
-      <div className="flex items-start gap-2 bg-slate-50 rounded-xl p-3 mt-auto">
-        <Shield className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-slate-500 leading-relaxed">
-          Your check-in is <strong>private</strong> unless you choose to share it with your family manager.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-const MOOD_OPTIONS = [
-  { emoji: "😞", label: "Very sad" },
-  { emoji: "😕", label: "Sad" },
-  { emoji: "😐", label: "Neutral" },
-  { emoji: "🙂", label: "Good" },
-  { emoji: "😊", label: "Very good" },
-];
-
-const STRESS_OPTIONS = [
-  { emoji: "😰", label: "Very stressed" },
-  { emoji: "😟", label: "Stressed" },
-  { emoji: "😐", label: "Moderate" },
-  { emoji: "😌", label: "Relaxed" },
-  { emoji: "😄", label: "Very relaxed" },
-];
-
-const ENERGY_OPTIONS = [
-  { emoji: "😴", label: "Exhausted" },
-  { emoji: "😪", label: "Very tired" },
-  { emoji: "😐", label: "Moderate" },
-  { emoji: "⚡", label: "Energized" },
-  { emoji: "✨", label: "Very energized" },
-];
-
 export default function WellbeingPage() {
-  // Form state
   const [sleepHours, setSleepHours] = useState(7);
   const [mood, setMood] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [stress, setStress] = useState<1 | 2 | 3 | 4 | 5>(3);
@@ -200,19 +63,16 @@ export default function WellbeingPage() {
   const [shareWithFamily, setShareWithFamily] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // History / risk state
   const [history, setHistory] = useState<WellbeingCheckIn[]>([]);
   const [burnoutRisk, setBurnoutRisk] = useState<"low" | "moderate" | "high" | null>(null);
-
-  // Toast
+  const [trendView, setTrendView] = useState<"7day" | "30day">("7day");
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-
-  // Backup request
-  const [requesting, setRequesting] = useState(false);
+  const [requestingBackup, setRequestingBackup] = useState(false);
+  const [backupSuccess, setBackupSuccess] = useState(false);
 
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), 4000);
   };
 
   const loadHistory = useCallback(async () => {
@@ -258,9 +118,8 @@ export default function WellbeingPage() {
 
       const data = await res.json();
       setBurnoutRisk(data.burnoutRisk);
-      showToast("Check-in saved! Take care of yourself 💚", "success");
+      showToast("Daily wellbeing check-in saved securely 💚", "success");
       setNote("");
-      setShareWithFamily(false);
       await loadHistory();
     } catch {
       showToast("Network error. Please try again.", "error");
@@ -270,187 +129,363 @@ export default function WellbeingPage() {
   };
 
   const handleRequestBackup = async () => {
-    setRequesting(true);
+    setRequestingBackup(true);
     try {
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "backup_request",
           type: "BACKUP_REQUEST",
-          title: "Backup caregiver support requested",
-          assignedTo: null,
-          reason: "Caregiver wellbeing score indicates burnout risk",
+          caregiverName: "Priya Sharma, RN",
+          reason: "Caregiver wellbeing trend indicates elevated fatigue & workload. Relief coverage requested.",
         }),
       });
+
       if (res.ok) {
-        showToast("Backup request submitted to care team.", "success");
+        setBackupSuccess(true);
+        showToast("CareLoop urgent task created for backup coverage.", "success");
       } else {
-        showToast("Could not submit request. Please try again.", "error");
+        showToast("Could not submit backup request.", "error");
       }
     } catch {
       showToast("Network error. Please try again.", "error");
     } finally {
-      setRequesting(false);
+      setRequestingBackup(false);
     }
   };
 
+  const days7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return d.toISOString().slice(0, 10);
+  });
+
+  const dotColor = (avg: number | null) => {
+    if (avg === null) return "bg-gray-200";
+    if (avg >= 3.5) return "bg-emerald-500";
+    if (avg >= 2.5) return "bg-amber-400";
+    return "bg-rose-500";
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-teal-50">
-      {/* Header */}
-      <div className="bg-[#2d4a3e] text-white py-8 px-4 shadow-md">
-        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-center gap-3">
-          <div className="w-12 h-12 bg-emerald-700/50 rounded-2xl flex items-center justify-center border border-emerald-600">
-            <Heart className="w-6 h-6 text-emerald-200" />
-          </div>
+    <div className="min-h-screen bg-[#f6f9f7] pb-16">
+      <Navbar activeRole="caregiver" onRoleChange={() => {}} />
+
+      {toast && (
+        <div
+          role="alert"
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 px-5 py-3 rounded-2xl shadow-xl text-white text-xs font-semibold ${
+            toast.type === "success" ? "bg-[#2d4a3e]" : "bg-rose-700"
+          }`}
+        >
+          {toast.type === "success" ? <CheckCircle className="w-4 h-4 text-emerald-300" /> : <AlertCircle className="w-4 h-4" />}
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+        {/* Header */}
+        <div className="bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 mb-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
-            <h1 className="text-3xl font-bold font-serif leading-tight">Caregiver Wellbeing</h1>
-            <p className="text-emerald-200 text-sm mt-0.5">
-              Your wellbeing matters for quality care
+            <div className="inline-flex items-center space-x-2 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full text-xs font-semibold text-emerald-800 mb-2">
+              <Heart className="w-3.5 h-3.5 text-rose-500" />
+              <span>Caregiver Health & Workload Protection</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-serif font-bold text-gray-900 tracking-tight">
+              Caregiver Wellbeing & Workload Hub
+            </h1>
+            <p className="mt-1 text-xs sm:text-sm text-gray-600 max-w-xl leading-relaxed">
+              Sustainable care starts with the caregiver. Check in daily on sleep, stress, and energy to spot workload fatigue before burnout happens.
             </p>
           </div>
-        </div>
-      </div>
 
-      {/* Main content */}
-      <div className="max-w-5xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* LEFT: Check-in form */}
-          <form
-            onSubmit={handleSubmit}
-            className="lg:col-span-3 bg-white rounded-2xl shadow-sm border border-slate-100 p-6 flex flex-col gap-6"
-            noValidate
-          >
-            <h2 className="text-xl font-semibold text-[#2d4a3e] font-serif">Today&apos;s Check-in</h2>
-
-            {/* Sleep hours */}
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 flex items-center space-x-3 text-xs text-gray-600">
+            <Lock className="w-5 h-5 text-emerald-700 shrink-0" />
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-3" htmlFor="sleep-slider">
-                Sleep Hours
-                <span className="ml-3 inline-block bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-0.5 rounded-full">
-                  {sleepHours} hours
-                </span>
-              </label>
-              <input
-                id="sleep-slider"
-                type="range"
-                min={0}
-                max={12}
-                step={0.5}
-                value={sleepHours}
-                onChange={(e) => setSleepHours(parseFloat(e.target.value))}
-                className="w-full h-2 rounded-lg appearance-none bg-emerald-100 accent-emerald-600 cursor-pointer focus:outline-none focus:ring-4 focus:ring-emerald-300"
-                aria-label={`Sleep hours: ${sleepHours}`}
-                aria-valuemin={0}
-                aria-valuemax={12}
-                aria-valuenow={sleepHours}
-              />
-              <div className="flex justify-between text-xs text-slate-400 mt-1">
-                <span>0h</span>
-                <span>6h</span>
-                <span>12h</span>
-              </div>
+              <span className="font-bold text-gray-900 block">Private by Default</span>
+              <span>Your responses remain confidential unless you check &quot;Share with Family&quot;.</span>
             </div>
-
-            {/* Mood */}
-            <div>
-              <span className="block text-sm font-semibold text-slate-700 mb-3">How are you feeling today?</span>
-              <EmojiSelector
-                name="Mood"
-                options={MOOD_OPTIONS}
-                value={mood}
-                onChange={(v) => setMood(v as 1 | 2 | 3 | 4 | 5)}
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1">
-                <span>Very bad</span>
-                <span>Very good</span>
-              </div>
-            </div>
-
-            {/* Stress */}
-            <div>
-              <span className="block text-sm font-semibold text-slate-700 mb-3">Stress level today?</span>
-              <EmojiSelector
-                name="Stress"
-                options={STRESS_OPTIONS}
-                value={stress}
-                onChange={(v) => setStress(v as 1 | 2 | 3 | 4 | 5)}
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1">
-                <span>Very high stress</span>
-                <span>Very low stress</span>
-              </div>
-            </div>
-
-            {/* Energy */}
-            <div>
-              <span className="block text-sm font-semibold text-slate-700 mb-3">Energy level?</span>
-              <EmojiSelector
-                name="Energy"
-                options={ENERGY_OPTIONS}
-                value={energy}
-                onChange={(v) => setEnergy(v as 1 | 2 | 3 | 4 | 5)}
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1">
-                <span>Exhausted</span>
-                <span>Energized</span>
-              </div>
-            </div>
-
-            {/* Note */}
-            <div>
-              <label htmlFor="wellbeing-note" className="block text-sm font-semibold text-slate-700 mb-2">
-                Notes <span className="font-normal text-slate-400">(optional)</span>
-              </label>
-              <textarea
-                id="wellbeing-note"
-                rows={3}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Anything on your mind today?"
-                maxLength={500}
-                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 focus:outline-none focus:ring-4 focus:ring-emerald-300 focus:border-emerald-400 resize-none placeholder:text-slate-400"
-              />
-            </div>
-
-            {/* Share with family */}
-            <label className="flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={shareWithFamily}
-                onChange={(e) => setShareWithFamily(e.target.checked)}
-                className="w-5 h-5 accent-emerald-600 rounded focus:ring-4 focus:ring-emerald-300"
-                aria-label="Share summary with family manager"
-              />
-              <span className="text-sm text-slate-700 font-medium">
-                Share summary with family manager
-              </span>
-            </label>
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-base font-semibold py-4 rounded-xl shadow-sm transition-colors focus:outline-none focus:ring-4 focus:ring-emerald-300"
-              aria-label="Save today's wellbeing check-in"
-            >
-              {submitting ? "Saving…" : "💚 Save Today's Check-in"}
-            </button>
-          </form>
-
-          {/* RIGHT: 7-day trend */}
-          <div className="lg:col-span-2">
-            <TrendPanel
-              history={history}
-              burnoutRisk={burnoutRisk}
-              onRequestBackup={handleRequestBackup}
-              requesting={requesting}
-            />
           </div>
         </div>
-      </div>
 
-      {/* Toast */}
-      {toast && <Toast message={toast.message} type={toast.type} />}
+        {/* Non-Diagnostic Guardrail Notice */}
+        <div className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-4 mb-8 text-xs text-amber-900 flex items-start space-x-3">
+          <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          <div className="leading-relaxed">
+            <strong>Ethical &amp; Non-Diagnostic Notice:</strong> Caregiver workload indicators are reflective personal check-ins designed to support balanced shift coverage. They are not medical, psychiatric, or clinical diagnoses of burnout.
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Check-In Form (2 Cols) */}
+          <div className="lg:col-span-2 bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 shadow-xs">
+            <h2 className="text-lg font-serif font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100 flex items-center justify-between">
+              <span>Today&apos;s Wellbeing Check-In</span>
+              <span className="text-xs text-gray-400 font-sans font-normal">Caregiver: Priya Sharma, RN</span>
+            </h2>
+
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Sleep slider */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-gray-800">
+                    Sleep Quality &amp; Rest ({sleepHours} Hours)
+                  </label>
+                  <span className="text-xs text-emerald-800 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md">
+                    {sleepHours >= 7 ? "Well Rested" : sleepHours >= 5 ? "Moderate Rest" : "Short Sleep"}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="12"
+                  step="0.5"
+                  value={sleepHours}
+                  onChange={(e) => setSleepHours(parseFloat(e.target.value))}
+                  className="w-full accent-emerald-700 h-2 bg-gray-100 rounded-lg cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                  <span>0 hrs</span>
+                  <span>6 hrs (Target minimum)</span>
+                  <span>12 hrs</span>
+                </div>
+              </div>
+
+              {/* Mood */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-2">
+                  General Mood &amp; Outlook
+                </label>
+                <EmojiSelector
+                  name="Mood"
+                  options={[
+                    { emoji: "😞", label: "Very Low" },
+                    { emoji: "😕", label: "Low" },
+                    { emoji: "😐", label: "Neutral" },
+                    { emoji: "🙂", label: "Good" },
+                    { emoji: "😊", label: "Very Good" },
+                  ]}
+                  value={mood}
+                  onChange={(v) => setMood(v as any)}
+                />
+              </div>
+
+              {/* Stress Level */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-2">
+                  Stress &amp; Emotional Strain
+                </label>
+                <EmojiSelector
+                  name="Stress"
+                  options={[
+                    { emoji: "😰", label: "Very High Strain" },
+                    { emoji: "😟", label: "Elevated" },
+                    { emoji: "😐", label: "Moderate" },
+                    { emoji: "😌", label: "Calm" },
+                    { emoji: "😄", label: "Very Calm & Centered" },
+                  ]}
+                  value={stress}
+                  onChange={(v) => setStress(v as any)}
+                />
+              </div>
+
+              {/* Energy Level */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-2">
+                  Physical Energy &amp; Stamina
+                </label>
+                <EmojiSelector
+                  name="Energy"
+                  options={[
+                    { emoji: "😴", label: "Exhausted" },
+                    { emoji: "😪", label: "Tired" },
+                    { emoji: "😐", label: "Moderate" },
+                    { emoji: "⚡", label: "Energetic" },
+                    { emoji: "✨", label: "Fully Energized" },
+                  ]}
+                  value={energy}
+                  onChange={(v) => setEnergy(v as any)}
+                />
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-bold text-gray-800 mb-1">
+                  Optional Reflection / Routine Handover Notes
+                </label>
+                <textarea
+                  rows={2}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="e.g. Afternoon shift was smooth. Eleanor walked in garden; needed minor reassurance with knee mobility."
+                  className="w-full text-xs border border-gray-300 rounded-xl p-3 bg-white text-gray-900 focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Privacy / Consent Checkbox */}
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-gray-900 block">
+                    Share wellbeing status with Family Manager?
+                  </span>
+                  <span className="text-[11px] text-gray-500">
+                    Allows Sarah Thompson to see when relief coverage or rest is needed.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={shareWithFamily}
+                  onChange={(e) => setShareWithFamily(e.target.checked)}
+                  className="w-5 h-5 accent-emerald-700 rounded-md cursor-pointer"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-[#2d4a3e] hover:bg-[#385b4c] text-white py-3.5 rounded-xl font-semibold text-xs shadow-xs transition-colors flex items-center justify-center space-x-2"
+              >
+                {submitting ? "Saving Check-In..." : "Save Today's Check-In"}
+              </button>
+            </form>
+          </div>
+
+          {/* Right Column: Trends & CareLoop Relief Trigger */}
+          <div className="space-y-6">
+            {/* 7-Day & 30-Day Trend Panel */}
+            <div className="bg-white rounded-3xl border border-gray-200 p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                <h3 className="font-serif font-bold text-sm text-gray-900 flex items-center space-x-1.5">
+                  <Activity className="w-4 h-4 text-emerald-700" />
+                  <span>Workload &amp; Fatigue Trends</span>
+                </h3>
+                <div className="inline-flex text-[10px] bg-gray-100 p-0.5 rounded-lg">
+                  <button
+                    onClick={() => setTrendView("7day")}
+                    className={`px-2 py-0.5 rounded-md ${
+                      trendView === "7day" ? "bg-white text-gray-900 font-bold shadow-xs" : "text-gray-500"
+                    }`}
+                  >
+                    7-Day
+                  </button>
+                  <button
+                    onClick={() => setTrendView("30day")}
+                    className={`px-2 py-0.5 rounded-md ${
+                      trendView === "30day" ? "bg-white text-gray-900 font-bold shadow-xs" : "text-gray-500"
+                    }`}
+                  >
+                    30-Day
+                  </button>
+                </div>
+              </div>
+
+              {/* Trend visual */}
+              {trendView === "7day" ? (
+                <div className="flex justify-between items-end gap-1 pt-2">
+                  {days7.map((date) => {
+                    const entry = history.find((h) => h.date === date);
+                    const avg = entry ? (entry.mood + entry.energy) / 2 : null;
+                    const dayLabel = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "narrow" });
+                    return (
+                      <div key={date} className="flex flex-col items-center gap-1.5 flex-1">
+                        <div
+                          className={`w-6 h-6 rounded-full ${dotColor(avg)} border-2 border-white shadow-xs flex items-center justify-center text-[9px] text-white font-bold`}
+                        >
+                          {entry ? `${entry.sleepHours}h` : "—"}
+                        </div>
+                        <span className="text-[10px] text-gray-400 font-semibold">{dayLabel}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="bg-gray-50 p-3 rounded-2xl text-xs text-gray-600 space-y-1.5">
+                  <div className="flex justify-between">
+                    <span>Logged Check-Ins:</span>
+                    <strong>{history.length} of last 30 days</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Average Sleep:</span>
+                    <strong>
+                      {history.length > 0
+                        ? (history.reduce((a, b) => a + b.sleepHours, 0) / history.length).toFixed(1) + " hrs"
+                        : "7.0 hrs"}
+                    </strong>
+                  </div>
+                </div>
+              )}
+
+              {/* Workload Risk Indicator */}
+              <div className="pt-2">
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">
+                  Rolling Workload Risk Indicator
+                </span>
+                {burnoutRisk === "high" ? (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-2xl text-xs flex items-center space-x-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span className="font-bold">Elevated Workload &bull; Relief Coverage Recommended</span>
+                  </div>
+                ) : burnoutRisk === "moderate" ? (
+                  <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-2xl text-xs flex items-center space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Monitor Shift Load &bull; Take scheduled rest breaks</span>
+                  </div>
+                ) : (
+                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded-2xl text-xs flex items-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="font-semibold">Balanced Workload &bull; Sustainable Shift Pace</span>
+                  </div>
+                )}
+              </div>
+
+              {/* CareLoop Backup Relief Button */}
+              <div className="pt-2">
+                {backupSuccess ? (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl font-semibold flex items-center space-x-2">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>Backup request active in CareLoop Inbox</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleRequestBackup}
+                    disabled={requestingBackup}
+                    className="w-full bg-[#243e33] hover:bg-[#1a2e26] text-white p-3 rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center justify-center space-x-2"
+                  >
+                    <Users className="w-4 h-4 text-emerald-300" />
+                    <span>{requestingBackup ? "Dispatching..." : "Request Backup Coverage (CareLoop)"}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Evidence-Based Personal Support Recommendations */}
+            <div className="bg-gradient-to-br from-emerald-50/80 to-white rounded-3xl border border-emerald-200 p-6 shadow-xs space-y-3">
+              <div className="flex items-center space-x-2">
+                <Coffee className="w-4 h-4 text-emerald-700" />
+                <h3 className="font-serif font-bold text-sm text-gray-900">
+                  Caregiver Resilience Suggestions
+                </h3>
+              </div>
+              <ul className="text-xs text-gray-600 space-y-2 leading-relaxed">
+                <li className="flex items-start space-x-1.5">
+                  <span className="text-emerald-700 font-bold">&bull;</span>
+                  <span><strong>15-Minute Recovery:</strong> Step outside after morning routine handover for sunlight &amp; hydration.</span>
+                </li>
+                <li className="flex items-start space-x-1.5">
+                  <span className="text-emerald-700 font-bold">&bull;</span>
+                  <span><strong>CareLoop Relay:</strong> If an afternoon doctor escort overlaps medication window, hand off to Sarah Thompson via CareLoop relay.</span>
+                </li>
+                <li className="flex items-start space-x-1.5">
+                  <span className="text-emerald-700 font-bold">&bull;</span>
+                  <span><strong>Evening Wind-Down:</strong> Avoid administrative charting within 45 minutes of bedtime.</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

@@ -1,7 +1,23 @@
 "use client";
 
 import React, { useState, useRef, useCallback } from "react";
-import { Sparkles, Upload, X, CheckCircle, AlertTriangle, Loader2, FileImage } from "lucide-react";
+import { Navbar } from "@/components/Navbar";
+import {
+  Sparkles,
+  Upload,
+  X,
+  CheckCircle,
+  AlertTriangle,
+  Loader2,
+  FileImage,
+  Volume2,
+  VolumeX,
+  ShieldAlert,
+  ArrowRight,
+  Clock,
+  Pill,
+  Languages,
+} from "lucide-react";
 
 interface Extraction {
   name: string;
@@ -11,6 +27,15 @@ interface Extraction {
   instructions: string;
   confidence: "high" | "medium" | "low";
   uncertain_fields: string[];
+  plain_language_explanation: string;
+  plain_language_hi?: string;
+  plain_language_mr?: string;
+  handwriting_alert?: string;
+}
+
+interface DraftSchedule {
+  slot: "morning" | "afternoon" | "evening" | "bedtime";
+  scheduleTime: string;
 }
 
 type CardState = "pending" | "added" | "rejected";
@@ -18,16 +43,17 @@ type CardState = "pending" | "added" | "rejected";
 interface ExtractionCard {
   extraction: Extraction;
   state: CardState;
+  draft: DraftSchedule;
 }
 
 const LANGUAGES = [
-  { code: "en", label: "English" },
-  { code: "hi", label: "हिंदी" },
-  { code: "mr", label: "मराठी" },
+  { code: "en", label: "English", flag: "🇬🇧" },
+  { code: "hi", label: "हिंदी", flag: "🇮🇳" },
+  { code: "mr", label: "मराठी", flag: "🇮🇳" },
 ];
 
 export default function MedSutraPage() {
-  const [language, setLanguage] = useState("en");
+  const [selectedLanguage, setSelectedLanguage] = useState<"en" | "hi" | "mr">("en");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -35,11 +61,12 @@ export default function MedSutraPage() {
   const [source, setSource] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), 4000);
   };
 
   const handleFile = (f: File) => {
@@ -105,6 +132,22 @@ export default function MedSutraPage() {
         (data.extractions as Extraction[]).map((e) => ({
           extraction: e,
           state: "pending" as CardState,
+          draft: {
+            slot: e.frequency.toLowerCase().includes("night") || e.frequency.toLowerCase().includes("bed")
+              ? "bedtime"
+              : e.frequency.toLowerCase().includes("afternoon")
+              ? "afternoon"
+              : e.frequency.toLowerCase().includes("evening")
+              ? "evening"
+              : "morning",
+            scheduleTime: e.frequency.toLowerCase().includes("night")
+              ? "08:30 PM"
+              : e.frequency.toLowerCase().includes("afternoon")
+              ? "01:00 PM"
+              : e.frequency.toLowerCase().includes("evening")
+              ? "06:00 PM"
+              : "08:00 AM",
+          },
         }))
       );
     } catch {
@@ -114,10 +157,46 @@ export default function MedSutraPage() {
     }
   };
 
+  const handleVoiceReadout = (card: ExtractionCard, idx: number) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      showToast("Speech synthesis is not supported on this browser.");
+      return;
+    }
+
+    if (speakingIndex === idx) {
+      window.speechSynthesis.cancel();
+      setSpeakingIndex(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    let textToSpeak = `${card.extraction.name}, dosage ${card.extraction.dosage}. Take ${card.extraction.frequency}. ${card.extraction.plain_language_explanation}`;
+    let voiceLang = "en-US";
+
+    if (selectedLanguage === "hi" && card.extraction.plain_language_hi) {
+      textToSpeak = `${card.extraction.name}, मात्रा ${card.extraction.dosage}. ${card.extraction.plain_language_hi}`;
+      voiceLang = "hi-IN";
+    } else if (selectedLanguage === "mr" && card.extraction.plain_language_mr) {
+      textToSpeak = `${card.extraction.name}, प्रमाण ${card.extraction.dosage}. ${card.extraction.plain_language_mr}`;
+      voiceLang = "mr-IN";
+    }
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utterance.lang = voiceLang;
+    utterance.rate = 0.9;
+
+    utterance.onend = () => setSpeakingIndex(null);
+    utterance.onerror = () => setSpeakingIndex(null);
+
+    setSpeakingIndex(idx);
+    window.speechSynthesis.speak(utterance);
+  };
+
   const handleVerifyAdd = async (idx: number) => {
     const card = cards[idx];
     if (!card) return;
-    const { extraction } = card;
+    const { extraction, draft } = card;
 
     try {
       const res = await fetch("/api/medications", {
@@ -127,11 +206,13 @@ export default function MedSutraPage() {
           name: extraction.name,
           dosage: extraction.dosage,
           instructions: extraction.instructions || extraction.frequency,
-          slot: "morning",
-          scheduleTime: "08:00 AM",
+          slot: draft.slot,
+          scheduleTime: draft.scheduleTime,
           remainingQuantity: 30,
           dailyFrequency: 1,
           refillThreshold: 7,
+          reason: `Prescription extraction verified via MedSutra AI by family manager`,
+          authorName: "Sarah Thompson (Family Manager)",
           actorRole: "family_manager",
         }),
       });
@@ -140,7 +221,7 @@ export default function MedSutraPage() {
         setCards((prev) =>
           prev.map((c, i) => (i === idx ? { ...c, state: "added" } : c))
         );
-        showToast(`✓ ${extraction.name} added to medication schedule`);
+        showToast(`✓ ${extraction.name} verified and added to active schedule`);
       } else {
         setError(data.error || "Failed to add medication.");
       }
@@ -155,298 +236,353 @@ export default function MedSutraPage() {
     );
   };
 
+  const getExplanation = (ext: Extraction) => {
+    if (selectedLanguage === "hi" && ext.plain_language_hi) return ext.plain_language_hi;
+    if (selectedLanguage === "mr" && ext.plain_language_mr) return ext.plain_language_mr;
+    return ext.plain_language_explanation;
+  };
+
   const confidenceConfig = {
     high: { label: "High Confidence", bg: "bg-emerald-100", text: "text-emerald-800", dot: "bg-emerald-500" },
     medium: { label: "Medium Confidence", bg: "bg-amber-100", text: "text-amber-800", dot: "bg-amber-500" },
     low: { label: "Low Confidence", bg: "bg-rose-100", text: "text-rose-800", dot: "bg-rose-500" },
   };
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const hasResults = cards.length > 0;
-  const activeCards = cards.filter((c) => c.state !== "rejected");
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#f0f7f4] to-[#e8f5ee]">
-      {/* Toast */}
+    <div className="min-h-screen bg-[#f6f9f7] pb-16">
+      <Navbar activeRole="family_manager" onRoleChange={() => {}} />
+
       {toast && (
-        <div className="fixed top-4 right-4 z-50 bg-emerald-700 text-white px-5 py-3 rounded-xl shadow-lg flex items-center space-x-2 animate-in slide-in-from-right">
-          <CheckCircle className="w-5 h-5 shrink-0" />
-          <span className="text-sm font-medium">{toast}</span>
+        <div className="fixed bottom-6 right-6 z-50 bg-[#2d4a3e] text-white px-5 py-3 rounded-2xl shadow-xl text-xs font-semibold flex items-center space-x-2 animate-in fade-in slide-in-from-bottom-2">
+          <CheckCircle className="w-4 h-4 text-emerald-300" />
+          <span>{toast}</span>
         </div>
       )}
 
-      <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#2d4a3e] text-emerald-200 shadow-lg mb-4">
-            <Sparkles className="w-8 h-8" />
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+        {/* Header Banner */}
+        <div className="bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 mb-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <div className="inline-flex items-center space-x-2 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full text-xs font-semibold text-emerald-800 mb-2">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Google Gemini Flash Vision Powered</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-serif font-bold text-gray-900 tracking-tight">
+              MedSutra AI — Prescription Intelligence
+            </h1>
+            <p className="mt-1 text-xs sm:text-sm text-gray-600 max-w-xl leading-relaxed">
+              Upload prescription photographs or PDFs. MedSutra extracts dosage, frequency, and instructions with clinical confidence scores and multilingual voice narration.
+            </p>
           </div>
-          <h1 className="font-serif text-4xl sm:text-5xl font-bold text-[#2d4a3e] mb-2">
-            MedSutra AI
-          </h1>
-          <p className="text-lg text-emerald-700 font-medium mb-3">
-            Prescription Intelligence
-          </p>
-          <span className="inline-flex items-center space-x-1.5 bg-[#2d4a3e] text-emerald-200 text-sm px-4 py-1.5 rounded-full font-medium shadow-sm">
-            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-            <span>Powered by Google Gemini Flash</span>
-          </span>
+
+          {/* Language Selector */}
+          <div className="flex flex-col sm:items-end">
+            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1.5 flex items-center space-x-1">
+              <Languages className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Explanation Language</span>
+            </span>
+            <div className="inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200">
+              {LANGUAGES.map((lang) => (
+                <button
+                  key={lang.code}
+                  onClick={() => setSelectedLanguage(lang.code as any)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    selectedLanguage === lang.code
+                      ? "bg-white text-gray-900 shadow-xs"
+                      : "text-gray-500 hover:text-gray-900"
+                  }`}
+                >
+                  <span className="mr-1">{lang.flag}</span>
+                  {lang.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* Language Selector */}
-        <div className="flex justify-center mb-8">
-          <div className="inline-flex bg-white rounded-xl border border-emerald-200 p-1 shadow-sm">
-            {LANGUAGES.map((lang) => (
-              <button
-                key={lang.code}
-                onClick={() => setLanguage(lang.code)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  language === lang.code
-                    ? "bg-[#2d4a3e] text-white shadow-sm"
-                    : "text-emerald-800 hover:bg-emerald-50"
-                }`}
-                aria-pressed={language === lang.code}
-              >
-                {lang.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Upload Card */}
-        <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm p-6 sm:p-8 mb-6">
-          <h2 className="text-xl font-serif font-bold text-[#2d4a3e] mb-4 flex items-center space-x-2">
-            <FileImage className="w-5 h-5 text-emerald-600" />
-            <span>Upload Prescription</span>
-          </h2>
-
-          {/* Drop Zone */}
+        {/* Upload Zone */}
+        <div className="bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 mb-8 shadow-xs">
           <div
-            className={`relative border-2 border-dashed rounded-xl p-8 sm:p-12 text-center transition-all cursor-pointer ${
-              isDragging
-                ? "border-emerald-500 bg-emerald-50"
-                : "border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50/50"
-            }`}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
             onClick={() => fileInputRef.current?.click()}
-            role="button"
-            tabIndex={0}
-            aria-label="Upload prescription file"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click();
-            }}
+            className={`border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center cursor-pointer transition-all ${
+              isDragging
+                ? "border-emerald-600 bg-emerald-50/50 scale-[0.99]"
+                : file
+                ? "border-emerald-400 bg-emerald-50/20"
+                : "border-gray-300 hover:border-emerald-500 hover:bg-gray-50/50"
+            }`}
           >
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,.pdf"
-              className="hidden"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
               onChange={onInputChange}
-              aria-hidden="true"
+              className="hidden"
             />
-            <Upload
-              className={`w-12 h-12 mx-auto mb-3 transition-colors ${
-                isDragging ? "text-emerald-600" : "text-emerald-300"
-              }`}
-            />
-            <p className="text-lg font-semibold text-[#2d4a3e] mb-1">
-              Drag & drop your prescription here
-            </p>
-            <p className="text-sm text-gray-500">
-              or click to browse • Images or PDF • Max 10MB
-            </p>
+
+            <div className="flex flex-col items-center">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center mb-4">
+                <Upload className="w-7 h-7" />
+              </div>
+              <p className="text-sm sm:text-base font-bold text-gray-900">
+                {file ? file.name : "Drag & drop prescription image or PDF here"}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {file
+                  ? `${(file.size / 1024).toFixed(1)} KB &bull; Click to select a different file`
+                  : "Supports JPEG, PNG, WebP photos or clinic discharge PDFs up to 10MB"}
+              </p>
+            </div>
           </div>
 
-          {/* File chip */}
-          {file && (
-            <div className="mt-4 inline-flex items-center space-x-2 bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-2 rounded-full text-sm font-medium">
-              <FileImage className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span className="max-w-xs truncate">{file.name}</span>
-              <span className="text-emerald-500">({formatFileSize(file.size)})</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setFile(null);
-                  setCards([]);
-                  setSource(null);
-                  setError(null);
-                  if (fileInputRef.current) fileInputRef.current.value = "";
-                }}
-                className="ml-1 text-emerald-600 hover:text-rose-600 transition-colors"
-                aria-label="Remove file"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* Error */}
           {error && (
-            <div className="mt-4 flex items-start space-x-2 bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl text-sm">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="mt-4 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* Analyze Button */}
-          <button
-            onClick={handleAnalyze}
-            disabled={!file || loading}
-            className={`mt-5 w-full py-3.5 px-6 rounded-xl font-semibold text-base transition-all flex items-center justify-center space-x-2 ${
-              !file || loading
-                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                : "bg-[#2d4a3e] hover:bg-[#1f352a] text-white shadow-md hover:shadow-lg"
-            }`}
-            aria-disabled={!file || loading}
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Analyzing Prescription…</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-5 h-5" />
-                <span>Analyze Prescription</span>
-              </>
-            )}
-          </button>
+          <div className="mt-5 flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-gray-100">
+            <div className="text-[11px] text-gray-400">
+              ⚡ Prescriptions are processed in memory and never shared with unauthorized parties.
+            </div>
+
+            <button
+              onClick={handleAnalyze}
+              disabled={!file || loading}
+              className="w-full sm:w-auto bg-[#2d4a3e] hover:bg-[#385b4c] text-white px-6 py-3 rounded-xl font-semibold text-xs transition-all shadow-xs disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-200" />
+                  <span>Extracting with Gemini Flash...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 text-emerald-300" />
+                  <span>Extract Prescription Intelligence</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
-        {/* Results */}
-        {hasResults && (
-          <div>
-            {/* Verification Banner */}
-            <div className="flex items-start space-x-3 bg-amber-50 border border-amber-300 text-amber-900 px-5 py-4 rounded-xl mb-6 shadow-sm">
-              <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-amber-600" />
-              <div>
-                <p className="font-bold text-base">⚠️ Human Verification Required</p>
-                <p className="text-sm mt-0.5">
-                  Review all fields carefully before adding to schedule.{" "}
-                  {source === "demo" && (
-                    <span className="font-medium text-amber-700">(Demo mode — no API key configured)</span>
-                  )}
-                </p>
+        {/* Extraction Results */}
+        {cards.length > 0 && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-gray-200">
+              <div className="flex items-center space-x-2">
+                <span className="font-serif text-lg font-bold text-gray-900">
+                  Extracted Medication Drafts ({cards.length})
+                </span>
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-semibold px-2.5 py-0.5 rounded-full">
+                  Source: {source === "gemini" ? "Google Gemini Vision" : "MedSutra Verified Demo"}
+                </span>
+              </div>
+
+              <div className="text-xs text-amber-800 bg-amber-50 px-3 py-1 rounded-xl border border-amber-200 inline-flex items-center space-x-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-700" />
+                <span>Human Verification Required Before Schedule Activation</span>
               </div>
             </div>
 
-            {/* Extraction Cards */}
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-5">
               {cards.map((card, idx) => {
-                if (card.state === "rejected") return null;
-
-                const { extraction } = card;
+                const { extraction, state, draft } = card;
                 const conf = confidenceConfig[extraction.confidence];
+                const hasHandwritingAlert =
+                  Boolean(extraction.handwriting_alert) || extraction.uncertain_fields.length > 0;
 
                 return (
                   <div
                     key={idx}
-                    className={`bg-white rounded-2xl border shadow-sm p-6 transition-all ${
-                      card.state === "added"
-                        ? "border-emerald-300 bg-emerald-50/50"
-                        : "border-gray-200 hover:border-emerald-200"
+                    className={`bg-white rounded-3xl border-2 p-6 transition-all ${
+                      state === "added"
+                        ? "border-emerald-500 bg-emerald-50/20 opacity-80"
+                        : state === "rejected"
+                        ? "border-gray-200 bg-gray-50 opacity-40 line-through"
+                        : "border-gray-200 shadow-sm hover:border-[#3d6554]"
                     }`}
                   >
-                    {/* Medicine header */}
-                    <div className="flex items-start justify-between mb-4">
-                      <div>
-                        <h3 className="text-xl font-bold font-serif text-[#2d4a3e]">
-                          {extraction.name}
-                        </h3>
-                        <p className="text-sm text-gray-500 mt-0.5">{extraction.instructions}</p>
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                      <div className="flex items-start space-x-3.5">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center justify-center shrink-0">
+                          <Pill className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-xl font-bold text-gray-900">{extraction.name}</h3>
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <span className="text-xs font-bold text-gray-700 bg-gray-100 px-2.5 py-0.5 rounded-md">
+                              {extraction.dosage}
+                            </span>
+                            <span className="text-xs text-gray-600 bg-gray-50 border border-gray-100 px-2 py-0.5 rounded-md">
+                              {extraction.frequency}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              Duration: <strong>{extraction.duration}</strong>
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      {/* Confidence badge */}
-                      <span
-                        className={`inline-flex items-center space-x-1.5 ${conf.bg} ${conf.text} text-xs font-semibold px-3 py-1 rounded-full shrink-0 ml-3`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} />
-                        <span>{conf.label}</span>
-                      </span>
+
+                      <div className="flex items-center space-x-2">
+                        {/* Confidence Pill */}
+                        <span
+                          className={`text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center space-x-1.5 ${conf.bg} ${conf.text}`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${conf.dot}`} />
+                          <span>{conf.label}</span>
+                        </span>
+
+                        {/* Voice Readout Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleVoiceReadout(card, idx)}
+                          className={`p-2 rounded-xl border text-xs font-semibold transition-colors flex items-center space-x-1 ${
+                            speakingIndex === idx
+                              ? "bg-emerald-700 text-white border-emerald-700"
+                              : "bg-gray-50 hover:bg-emerald-50 text-emerald-800 border-gray-200"
+                          }`}
+                          title="Voice Readout in Selected Language"
+                        >
+                          {speakingIndex === idx ? (
+                            <VolumeX className="w-4 h-4 text-white" />
+                          ) : (
+                            <Volume2 className="w-4 h-4 text-emerald-700" />
+                          )}
+                          <span className="hidden sm:inline">Voice</span>
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Detail pills */}
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      <span className="bg-[#2d4a3e]/10 text-[#2d4a3e] text-sm font-semibold px-3 py-1.5 rounded-full">
-                        💊 {extraction.dosage}
-                      </span>
-                      <span className="bg-emerald-50 text-emerald-800 text-sm font-medium px-3 py-1.5 rounded-full border border-emerald-100">
-                        🕐 {extraction.frequency}
-                      </span>
-                      <span className="bg-sky-50 text-sky-800 text-sm font-medium px-3 py-1.5 rounded-full border border-sky-100">
-                        📅 {extraction.duration}
-                      </span>
+                    {/* Handwriting Warning */}
+                    {hasHandwritingAlert && (
+                      <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start space-x-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                        <div>
+                          <strong>Handwriting Clarification Alert:</strong>{" "}
+                          {extraction.handwriting_alert ||
+                            `Fields with potential ambiguity: ${extraction.uncertain_fields.join(", ")}. Please review physically before confirming.`}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Plain Language Explanation */}
+                    <div className="mt-4 bg-[#fbfdfc] border border-emerald-100 rounded-2xl p-4">
+                      <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider mb-1 flex items-center space-x-1">
+                        <span>💡 Patient-Friendly Explanation ({selectedLanguage.toUpperCase()})</span>
+                      </div>
+                      <p className="text-xs sm:text-sm text-gray-700 leading-relaxed font-sans">
+                        {getExplanation(extraction)}
+                      </p>
                     </div>
 
-                    {/* Uncertain fields warning */}
-                    {extraction.uncertain_fields.length > 0 && (
-                      <div className="flex items-center space-x-2 mb-4 flex-wrap gap-1">
-                        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                        <span className="text-xs text-amber-700 font-medium">Uncertain:</span>
-                        {extraction.uncertain_fields.map((f) => (
-                          <span
-                            key={f}
-                            className="bg-amber-100 text-amber-800 text-xs font-semibold px-2 py-0.5 rounded-full border border-amber-200"
+                    {/* Schedule Draft Parameters */}
+                    {state === "pending" && (
+                      <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">
+                            Schedule Slot
+                          </label>
+                          <select
+                            value={draft.slot}
+                            onChange={(e) => {
+                              const newSlot = e.target.value as any;
+                              setCards((prev) =>
+                                prev.map((c, i) =>
+                                  i === idx
+                                    ? {
+                                        ...c,
+                                        draft: {
+                                          ...c.draft,
+                                          slot: newSlot,
+                                          scheduleTime:
+                                            newSlot === "morning"
+                                              ? "08:00 AM"
+                                              : newSlot === "afternoon"
+                                              ? "01:00 PM"
+                                              : newSlot === "evening"
+                                              ? "06:00 PM"
+                                              : "08:30 PM",
+                                        },
+                                      }
+                                    : c
+                                )
+                              );
+                            }}
+                            className="w-full text-xs border border-gray-300 rounded-xl p-2 bg-white text-gray-900"
                           >
-                            {f}
-                          </span>
-                        ))}
+                            <option value="morning">Morning (8:00 AM)</option>
+                            <option value="afternoon">Afternoon (1:00 PM)</option>
+                            <option value="evening">Evening (6:00 PM)</option>
+                            <option value="bedtime">Bedtime (8:30 PM)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">
+                            Scheduled Routine Time
+                          </label>
+                          <input
+                            type="text"
+                            value={draft.scheduleTime}
+                            onChange={(e) => {
+                              const newTime = e.target.value;
+                              setCards((prev) =>
+                                prev.map((c, i) =>
+                                  i === idx ? { ...c, draft: { ...c.draft, scheduleTime: newTime } } : c
+                                )
+                              );
+                            }}
+                            className="w-full text-xs border border-gray-300 rounded-xl p-2 bg-white text-gray-900"
+                          />
+                        </div>
                       </div>
                     )}
 
-                    {/* Action buttons */}
-                    {card.state === "pending" && (
-                      <div className="flex items-center space-x-3 mt-2">
-                        <button
-                          onClick={() => handleVerifyAdd(idx)}
-                          className="flex-1 bg-[#2d4a3e] hover:bg-[#1f352a] text-white py-2.5 px-4 rounded-xl font-semibold text-sm transition-all flex items-center justify-center space-x-2 shadow-sm"
-                        >
+                    {/* Actions */}
+                    <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                      <div className="text-[11px] text-gray-400">
+                        Instructions: {extraction.instructions}
+                      </div>
+
+                      {state === "pending" ? (
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => handleReject(idx)}
+                            className="text-xs text-gray-500 hover:text-gray-800 px-3 py-1.5 rounded-lg"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleVerifyAdd(idx)}
+                            className="bg-[#2d4a3e] hover:bg-[#395c4e] text-white text-xs font-semibold px-4 py-2 rounded-xl transition-all shadow-xs flex items-center space-x-1"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-300" />
+                            <span>Verify &amp; Add to Schedule</span>
+                          </button>
+                        </div>
+                      ) : state === "added" ? (
+                        <span className="text-xs font-bold text-emerald-700 inline-flex items-center space-x-1">
                           <CheckCircle className="w-4 h-4" />
-                          <span>✓ Verify & Add to Schedule</span>
-                        </button>
-                        <button
-                          onClick={() => handleReject(idx)}
-                          className="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2.5 px-4 rounded-xl font-semibold text-sm transition-all flex items-center justify-center space-x-2"
-                        >
-                          <X className="w-4 h-4" />
-                          <span>✗ Reject</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {card.state === "added" && (
-                      <div className="flex items-center space-x-2 mt-2 text-emerald-700 font-semibold text-sm">
-                        <CheckCircle className="w-5 h-5 text-emerald-600" />
-                        <span>Added ✓ — Medication scheduled successfully</span>
-                      </div>
-                    )}
+                          <span>Approved &bull; Active Schedule Created</span>
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">Rejected</span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
-
-              {activeCards.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  <CheckCircle className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
-                  <p className="font-medium">All extractions reviewed.</p>
-                </div>
-              )}
             </div>
           </div>
         )}
-
-        {/* Safety Disclaimer */}
-        <p className="mt-10 text-center text-sm italic text-gray-400 leading-relaxed">
-          MedSutra AI assists with prescription reading — it does not replace a licensed pharmacist or physician.
-          Always verify extracted information with the original prescription and consult your healthcare provider
-          before making any changes to medication schedules.
-        </p>
-      </div>
+      </main>
     </div>
   );
 }

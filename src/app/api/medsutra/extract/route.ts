@@ -9,6 +9,10 @@ const ExtractionSchema = z.object({
   instructions: z.string(),
   confidence: z.enum(["high", "medium", "low"]),
   uncertain_fields: z.array(z.string()),
+  plain_language_explanation: z.string(),
+  plain_language_hi: z.string().optional(),
+  plain_language_mr: z.string().optional(),
+  handwriting_alert: z.string().optional(),
 });
 
 const ExtractionArraySchema = z.array(ExtractionSchema);
@@ -16,21 +20,36 @@ const ExtractionArraySchema = z.array(ExtractionSchema);
 const DEMO_EXTRACTIONS = [
   {
     name: "Metformin ER",
-    dosage: "500mg",
+    dosage: "500 mg",
     frequency: "Once daily with breakfast",
     duration: "90 days",
-    instructions: "Take with food",
+    instructions: "Take with breakfast and a glass of water.",
     confidence: "high" as const,
     uncertain_fields: [],
+    plain_language_explanation:
+      "A daily medication that helps lower and balance blood glucose levels for Type 2 Diabetes by reducing liver sugar production.",
+    plain_language_hi:
+      "यह दवा टाइप 2 मधुमेह के लिए भोजन के बाद रक्त शर्करा (ब्लड शुगर) को नियंत्रित करने में मदद करती है।",
+    plain_language_mr:
+      "हे औषध टाइप २ मधुमेहासाठी जेवणानंतर रक्तातील साखर नियंत्रित ठेवण्यास मदत करते.",
+    handwriting_alert: undefined,
   },
   {
     name: "Lisinopril",
-    dosage: "10mg",
-    frequency: "Once daily",
+    dosage: "10 mg",
+    frequency: "Once daily in the morning",
     duration: "Ongoing",
-    instructions: "Morning preferred",
+    instructions: "Blood pressure tablet. Do not take with salt substitutes.",
     confidence: "medium" as const,
     uncertain_fields: ["duration"],
+    plain_language_explanation:
+      "Relaxes blood vessels so blood flows more easily, protecting against high blood pressure and cardiac strain.",
+    plain_language_hi:
+      "यह उच्च रक्तचाप को कम करने और हृदय को स्वस्थ रखने के लिए रक्त वाहिकाओं को शिथिल करता है।",
+    plain_language_mr:
+      "हे उच्च रक्तदाब कमी करण्यासाठी आणि हृदयाचे रक्षण करण्यासाठी रक्तवाहिन्या शिथिल करते.",
+    handwriting_alert:
+      "Doctor's handwriting for duration was partially faded. Verification with dispensing pharmacist is advised.",
   },
 ];
 
@@ -49,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     if (!file) {
       return NextResponse.json(
-        { success: false, error: "Missing prescription field" },
+        { success: false, error: "Missing prescription file" },
         { status: 400, headers: { "X-Verification-Required": "true" } }
       );
     }
@@ -63,35 +82,31 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate file type
-    const allowedTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-      "image/gif",
-      "image/heic",
-      "application/pdf",
-    ];
-    if (!allowedTypes.some((t) => file.type.startsWith("image/") || file.type === "application/pdf")) {
-      // Check more loosely — accept any image/* or pdf
-      if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
-        return NextResponse.json(
-          { success: false, error: "Only image or PDF files are accepted" },
-          { status: 400, headers: { "X-Verification-Required": "true" } }
-        );
-      }
+    const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf";
+    if (!isImage && !isPdf) {
+      return NextResponse.json(
+        { success: false, error: "Only image files (JPEG, PNG, WebP) or PDFs are accepted" },
+        { status: 400, headers: { "X-Verification-Required": "true" } }
+      );
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      // Demo mode — no API key
+      // Demo mode — returns verified structured sample extractions
       return NextResponse.json(
-        { success: true, source: "demo", extractions: DEMO_EXTRACTIONS },
+        {
+          success: true,
+          source: "demo",
+          extractions: DEMO_EXTRACTIONS,
+          message: "Processed via MedSutra demo mode (GEMINI_API_KEY not configured).",
+        },
         { headers: { "X-Verification-Required": "true" } }
       );
     }
 
-    // Gemini mode
+    // Live Google Gemini Vision Extraction
     const { GoogleGenerativeAI } = await import("@google/generative-ai");
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -99,30 +114,37 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const base64Data = Buffer.from(arrayBuffer).toString("base64");
 
-    const prompt = `You are a medical prescription reader. Extract all medicines from this prescription image.
-Return ONLY a valid JSON array (no markdown, no extra text) with each medicine as an object containing these fields:
-- name: string (medicine name)
-- dosage: string (e.g. "500mg")
-- frequency: string (e.g. "Once daily", "Twice daily with meals")
-- duration: string (e.g. "30 days", "Ongoing")
-- instructions: string (special instructions, e.g. "Take with food", "Avoid sunlight")
-- confidence: "high" | "medium" | "low" (how clearly readable this entry is)
-- uncertain_fields: string[] (list of field names that were hard to read, e.g. ["dosage", "duration"])
+    const prompt = `You are MedSutra AI, a clinical prescription extraction assistant.
+Extract all medications from this medical prescription document or image.
 
-Example output:
-[{"name":"Metformin","dosage":"500mg","frequency":"Once daily","duration":"90 days","instructions":"Take with food","confidence":"high","uncertain_fields":[]}]`;
+SAFETY & EXTRACTION RULES:
+1. Never guess illegible or smudged handwriting. If a field is hard to read, mark confidence as "medium" or "low", add the field name to uncertain_fields, and explain in handwriting_alert.
+2. Never recommend or alter dosages independently.
+3. For each medicine, provide:
+   - name: Exact medicine brand or generic name
+   - dosage: Strength (e.g., "500 mg", "10 mg")
+   - frequency: How often to take (e.g., "Once daily with breakfast")
+   - duration: How long (e.g., "30 days", "Ongoing")
+   - instructions: Special timing or meal instructions
+   - confidence: "high" | "medium" | "low"
+   - uncertain_fields: list of field names that were ambiguous
+   - plain_language_explanation: Simple 1-sentence explanation of what this medicine does in plain English for an elderly patient.
+   - plain_language_hi: Same explanation translated into natural Hindi (Devanagari script).
+   - plain_language_mr: Same explanation translated into natural Marathi (Devanagari script).
+   - handwriting_alert: Warning note if doctor's handwriting was unclear or ambiguous.
+
+Return ONLY a raw valid JSON array matching this schema without markdown fences or additional prose.`;
 
     const imagePart = {
       inlineData: {
         data: base64Data,
-        mimeType: file.type as string,
+        mimeType: file.type || "image/jpeg",
       },
     };
 
     const result = await model.generateContent([prompt, imagePart]);
     const responseText = result.response.text().trim();
 
-    // Strip markdown code fences if present
     const cleaned = responseText
       .replace(/^```json\s*/i, "")
       .replace(/^```\s*/i, "")
@@ -151,10 +173,10 @@ Example output:
       { success: true, source: "gemini", extractions: validated.data },
       { headers: { "X-Verification-Required": "true" } }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error("[MedSutra extract]", error);
     return NextResponse.json(
-      { success: false, error: "Internal server error" },
+      { success: false, error: error?.message || "Internal server error" },
       { status: 500, headers: { "X-Verification-Required": "true" } }
     );
   }
