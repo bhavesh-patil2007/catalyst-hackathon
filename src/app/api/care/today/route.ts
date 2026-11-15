@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { careRepository } from "@/lib/db/repository";
 import { guardianStore } from "@/lib/store";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
@@ -18,18 +19,20 @@ export async function GET(request: Request) {
 
     const { actor } = authResult;
 
-    // Sanitize profile: strictly redact passcodes and circle invite codes from HTTP response
-    const profile = guardianStore.getSanitizedProfile(actor.role);
-    const members = guardianStore.getMembers();
-    const medications = guardianStore.getMedications();
-    const occurrences = guardianStore.getOccurrences();
-    const appointments = guardianStore.getAppointments();
-    const tasks = guardianStore.getTasks();
-    const notifications = guardianStore.getNotifications();
-    const auditEvents = guardianStore.getAuditEvents();
+    // Fetch through persistent database repository (PostgreSQL/Supabase)
+    const profile = await careRepository.getSanitizedProfile(actor.role);
+    const members = await careRepository.getMembers(actor.profileId);
+    const medications = await careRepository.getMedications(actor.profileId);
+    const versions = await careRepository.getMedicationVersions();
+    const occurrences = await careRepository.getOccurrences(actor.profileId);
+    const appointments = await careRepository.getAppointments(actor.profileId);
+    const tasks = await careRepository.getTasks(actor.profileId);
+    const notifications = await careRepository.getNotifications();
+    const auditEvents = await careRepository.getAuditEvents(actor.profileId);
+
+    // Dynamic aggregations
     const brief = guardianStore.getDailyCareBrief();
     const refillRunways = guardianStore.getRefillRunways();
-    const versions = guardianStore.getMedicationVersions();
 
     return NextResponse.json({
       success: true,
@@ -47,7 +50,8 @@ export async function GET(request: Request) {
         refillRunways,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error("[api/care/today] Error:", error?.message);
     return NextResponse.json(
       { success: false, error: "Failed to fetch care data" },
       { status: 500 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { careRepository } from "@/lib/db/repository";
 import { guardianStore } from "@/lib/store";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
@@ -43,7 +44,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const newAppt = guardianStore.addAppointment({
+    // Persist appointment through database repository
+    const profile = await careRepository.getProfile();
+    const newAppt = await careRepository.addAppointment({
+      careProfileId: validated.careProfileId || actor.profileId || profile.id,
       doctorName: validated.doctorName,
       specialty: validated.specialty,
       clinicName: validated.clinicName,
@@ -59,7 +63,7 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json({ success: true, data: newAppt }, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }

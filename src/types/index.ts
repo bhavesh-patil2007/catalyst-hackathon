@@ -91,6 +91,7 @@ export interface DoseCheckIn {
   actorRole: UserRole;
   recordedAt: string;
   note?: string;
+  doNotNotifyFamily?: boolean;
 }
 
 export interface DoctorAppointment {

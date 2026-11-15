@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { careRepository, TaskOutcome } from "@/lib/db/repository";
 import { guardianStore } from "@/lib/store";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
@@ -63,9 +64,8 @@ export async function POST(request: Request) {
 
     if (body.action === "claim") {
       const { taskId } = claimSchema.parse(body);
-      // Strictly derive claimer from verified session
       const claimer = actor.memberName;
-      const task = guardianStore.claimTask(taskId, claimer);
+      const task = await careRepository.claimTask(taskId, claimer);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }
@@ -74,9 +74,8 @@ export async function POST(request: Request) {
 
     if (body.action === "handoff") {
       const { taskId, toCaregiver, note } = handoffSchema.parse(body);
-      // Strictly derive assignor from verified session
       const assignor = actor.memberName;
-      const task = guardianStore.handoffTask(taskId, assignor, toCaregiver, note);
+      const task = await careRepository.handoffTask(taskId, assignor, toCaregiver, note);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }
@@ -85,9 +84,8 @@ export async function POST(request: Request) {
 
     if (body.action === "resolve") {
       const { taskId, outcome, note } = resolveSchema.parse(body);
-      // Strictly derive resolver from verified session
       const resolver = actor.memberName;
-      const task = guardianStore.resolveTask(taskId, outcome, note, resolver);
+      const task = await careRepository.resolveTask(taskId, outcome as TaskOutcome, note, resolver);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
       }
@@ -98,7 +96,7 @@ export async function POST(request: Request) {
       const parsed = backupSchema.safeParse(body);
       const reason = (parsed.success && parsed.data.reason) || "Caregiver wellbeing trend indicates elevated fatigue & workload";
       const caregiverName = actor.memberName;
-      const task = guardianStore.createBackupRequest({
+      const task = await careRepository.createBackupRequest({
         caregiverName,
         reason,
       });
@@ -106,7 +104,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ success: false, error: "Invalid action" }, { status: 400 });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }

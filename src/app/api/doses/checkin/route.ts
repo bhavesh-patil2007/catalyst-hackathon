@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { careRepository } from "@/lib/db/repository";
 import { guardianStore } from "@/lib/store";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
@@ -43,8 +44,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // Actor identity strictly derived from server-side verified session
-    const updated = guardianStore.recordCheckIn(
+    // Persist dose check-in state through database repository
+    const updated = await careRepository.recordCheckIn(
       validated.occurrenceId,
       validated.status,
       actor.memberName,
@@ -68,7 +69,7 @@ export async function POST(request: Request) {
         role: actor.role,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }

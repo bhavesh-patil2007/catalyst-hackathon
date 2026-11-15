@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { careRepository } from "@/lib/db/repository";
 import { guardianStore } from "@/lib/store";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
@@ -41,8 +42,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // authorName is strictly derived from verified session, never client body
-    const newMed = guardianStore.addMedicationWithVersion({
+    // Persist through database repository (PostgreSQL/Supabase)
+    const newMed = await careRepository.addMedicationWithVersion({
       name: validated.name,
       dosage: validated.dosage,
       instructions: validated.instructions,
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json({ success: true, data: newMed }, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }
@@ -100,8 +101,8 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // authorName is strictly derived from verified session, never client body
-    const result = guardianStore.editMedicationWithVersion({
+    // Persist schedule edit & version history through database repository
+    const result = await careRepository.editMedicationWithVersion({
       medicationId: validated.medicationId,
       dosage: validated.dosage,
       instructions: validated.instructions,
@@ -123,7 +124,7 @@ export async function PATCH(request: Request) {
       data: result.medication,
       version: result.version,
     });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }

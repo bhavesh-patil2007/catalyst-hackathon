@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHistory, getBurnoutRisk } from "@/lib/wellbeingStore";
+import { careRepository } from "@/lib/db/repository";
+import { getBurnoutRisk } from "@/lib/wellbeingStore";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 export async function GET(req: NextRequest) {
@@ -18,8 +19,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const requestedCaregiverId = searchParams.get("caregiverId") || actor.memberName;
 
-  // Retrieve raw history
-  const rawHistory = getHistory(requestedCaregiverId);
+  // Retrieve history through persistent database repository
+  const rawHistory = await careRepository.getWellbeingHistory(requestedCaregiverId);
 
   // 2. Server-side privacy enforcement:
   // If the requester is not the caregiver themselves (e.g. family manager or elder owner),

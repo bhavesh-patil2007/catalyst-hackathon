@@ -1,18 +1,28 @@
 import { NextResponse } from "next/server";
-import { guardianStore } from "@/lib/store";
+import { careRepository } from "@/lib/db/repository";
 import { dispatchProactiveEmail } from "@/lib/notificationService";
+import { DoseOccurrence } from "@/types";
 
 const GRACE_PERIOD_MS = 30 * 60 * 1000; // 30 minutes grace period
 const UPCOMING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes before dose
 
 /**
- * Parses a time string like "08:00 AM", "01:00 PM", "8:00 PM" into today's local Date.
+ * Derives the exact scheduled timestamp for a dose occurrence.
+ * Prefers ISO timestamp (scheduledIso), with timezone-aware fallback.
  */
-function parseScheduledTimeToDate(timeStr: string, referenceDate: Date = new Date()): Date {
-  const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  if (!match) {
-    return new Date(referenceDate);
+function getDoseScheduledDate(dose: DoseOccurrence, timezone: string = "America/New_York"): Date {
+  if (dose.scheduledIso) {
+    const parsed = new Date(dose.scheduledIso);
+    if (!isNaN(parsed.getTime())) {
+      return parsed;
+    }
   }
+
+  // Fallback: parse time string (e.g., "08:00 AM", "01:00 PM") against today
+  const match = dose.scheduledTime?.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  const now = new Date();
+  if (!match) return now;
+
   let hours = parseInt(match[1], 10);
   const minutes = parseInt(match[2], 10);
   const meridiem = match[3]?.toUpperCase();
@@ -20,7 +30,7 @@ function parseScheduledTimeToDate(timeStr: string, referenceDate: Date = new Dat
   if (meridiem === "PM" && hours < 12) hours += 12;
   if (meridiem === "AM" && hours === 12) hours = 0;
 
-  const target = new Date(referenceDate);
+  const target = new Date(now);
   target.setHours(hours, minutes, 0, 0);
   return target;
 }
@@ -55,11 +65,12 @@ export async function POST(request: Request) {
     const now = new Date();
     const todayIso = now.toISOString().slice(0, 10);
 
-    const profile = guardianStore.getProfile();
-    const members = guardianStore.getMembers();
-    const occurrences = guardianStore.getOccurrences();
-    const appointments = guardianStore.getAppointments();
-    const existingTasks = guardianStore.getTasks();
+    // Fetch through database repository
+    const profile = await careRepository.getProfile();
+    const members = await careRepository.getMembers(profile.id);
+    const occurrences = await careRepository.getOccurrences(profile.id);
+    const appointments = await careRepository.getAppointments(profile.id);
+    const existingTasks = await careRepository.getTasks(profile.id);
 
     const results = {
       timestamp: now.toISOString(),
@@ -73,8 +84,10 @@ export async function POST(request: Request) {
     for (const dose of occurrences) {
       if (dose.status !== "SCHEDULED") continue;
 
-      const scheduledDate = parseScheduledTimeToDate(dose.scheduledTime, now);
+      const scheduledDate = getDoseScheduledDate(dose, profile.timezone);
       const diffMs = scheduledDate.getTime() - now.getTime();
+
+      // Check if scheduled time falls within the upcoming reminder window (0 to 30 min from now)
       const isDueSoon = forceCheck || (diffMs >= 0 && diffMs <= UPCOMING_WINDOW_MS);
 
       if (isDueSoon) {
@@ -103,22 +116,34 @@ export async function POST(request: Request) {
 
     // 3. Autonomous Escalation for Missed / Overdue Doses past Grace Period
     for (const dose of occurrences) {
-      if (dose.status === "MARKED_TAKEN" || dose.status === "RESOLVED" || dose.status === "SKIPPED") {
+      // Taken, resolved, or explicitly skipped doses are never escalated
+      if (
+        dose.status === "MARKED_TAKEN" ||
+        dose.status === "RESOLVED" ||
+        dose.status === "SKIPPED"
+      ) {
         continue;
       }
 
-      const scheduledDate = parseScheduledTimeToDate(dose.scheduledTime, now);
+      // Respect elder privacy preferences: do not escalate if marked doNotNotifyFamily or silent
+      if (dose.silentRoutine || dose.checkIn?.doNotNotifyFamily) {
+        continue;
+      }
+
+      const scheduledDate = getDoseScheduledDate(dose, profile.timezone);
       const overdueMs = now.getTime() - scheduledDate.getTime();
+
+      // Eligible only if current time is past scheduled time + configured grace period
       const isOverdue = forceCheck || (dose.status === "PENDING" && overdueMs > GRACE_PERIOD_MS);
 
       if (isOverdue) {
-        // Enforce idempotency: Do not duplicate task if already open for this occurrence
+        // Enforce idempotency: verify no active task already exists for this occurrence
         const existingOpenTask = existingTasks.find(
           (t) => t.sourceOccurrenceId === dose.id && (t.status === "OPEN" || t.status === "CLAIMED")
         );
 
         if (!existingOpenTask) {
-          const task = guardianStore.escalateUnconfirmedDose(dose.id);
+          const task = await careRepository.escalateUnconfirmedDose(dose.id);
           if (task) {
             results.missedDoseEscalations++;
             results.tasksCreated.push(task.id);
@@ -150,7 +175,7 @@ export async function POST(request: Request) {
 
       const apptDate = new Date(appt.dateTime);
       const msUntilAppt = !isNaN(apptDate.getTime()) ? apptDate.getTime() - now.getTime() : 0;
-      // Remind if appointment is within 48 hours or forceCheck is active
+      // Remind only if appointment falls within the configured 48-hour window
       const isWithinReminderWindow =
         forceCheck || (msUntilAppt > 0 && msUntilAppt <= 48 * 60 * 60 * 1000);
 
@@ -183,8 +208,8 @@ export async function POST(request: Request) {
       message: "Autonomous care watchdog completed routine scan.",
       results,
     });
-  } catch (error) {
-    console.error("[Watchdog]", error);
+  } catch (error: any) {
+    console.error("[Watchdog Error]", error?.message);
     return NextResponse.json(
       { success: false, error: "Watchdog execution failed" },
       { status: 500 }
@@ -194,7 +219,7 @@ export async function POST(request: Request) {
 
 /**
  * Reject GET requests with 405 Method Not Allowed.
- * Watchdog must only be invoked via POST with appropriate authorization.
+ * Watchdog execution must only occur via authorized POST requests.
  */
 export async function GET() {
   return new NextResponse("Method Not Allowed", {

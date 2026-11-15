@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { addCheckIn, getBurnoutRisk } from "@/lib/wellbeingStore";
+import { careRepository } from "@/lib/db/repository";
+import { getBurnoutRisk } from "@/lib/wellbeingStore";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const CheckInSchema = z.object({
@@ -34,7 +35,8 @@ export async function POST(req: NextRequest) {
     // 2. Derive caregiver identity STRICTLY from the verified session
     const verifiedCaregiverId = actor.memberName;
 
-    const checkIn = addCheckIn({
+    // 3. Persist through database repository
+    const checkIn = await careRepository.addWellbeingCheckIn({
       ...parsed.data,
       caregiverId: verifiedCaregiverId,
     });
