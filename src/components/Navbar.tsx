@@ -1,20 +1,20 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   HeartHandshake,
   Heart,
-  Search,
   Bell,
   Volume2,
   VolumeX,
   Type,
   SunMoon,
-  ShieldCheck,
-  UserCheck,
   Sparkles,
   Lock,
+  LogOut,
+  User,
+  Shield,
 } from "lucide-react";
 import { PasscodeGateModal } from "./PasscodeGateModal";
 import { UserRole } from "@/types";
@@ -40,6 +40,30 @@ export function Navbar({
   const [highContrast, setHighContrast] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [isPasscodeModalOpen, setIsPasscodeModalOpen] = useState(false);
+
+  // Authenticated server session state
+  const [sessionUser, setSessionUser] = useState<{
+    authenticated: boolean;
+    role?: UserRole;
+    memberName?: string;
+  }>({ authenticated: false });
+
+  // Sync real authenticated session on mount and route changes
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.authenticated && data.role) {
+          setSessionUser({
+            authenticated: true,
+            role: data.role,
+            memberName: data.memberName,
+          });
+          onRoleChange(data.role);
+        }
+      })
+      .catch(() => {});
+  }, [pathname, onRoleChange]);
 
   const toggleFontSize = () => {
     const next = fontSize === "normal" ? "large" : fontSize === "large" ? "xlarge" : "normal";
@@ -75,12 +99,38 @@ export function Navbar({
   const handlePasscodeSuccess = (role: UserRole) => {
     setIsPasscodeModalOpen(false);
     onRoleChange(role);
+    setSessionUser({
+      authenticated: true,
+      role,
+      memberName: sessionUser.memberName || "Authenticated Member",
+    });
     if (role === "owner") {
       router.push("/elder");
     } else if (role === "caregiver") {
       router.push("/caregiver");
+    } else if (role === "read_only") {
+      router.push("/timeline");
     } else {
       router.push("/dashboard");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
+    setSessionUser({ authenticated: false });
+    router.push("/login");
+  };
+
+  // Safe role switcher: requires authentication if switching to a non-authenticated role
+  const handleRolePillClick = (targetRole: UserRole) => {
+    if (sessionUser.role !== targetRole) {
+      setIsPasscodeModalOpen(true);
+    } else {
+      if (targetRole === "owner") router.push("/elder");
+      else if (targetRole === "caregiver") router.push("/caregiver");
+      else router.push("/dashboard");
     }
   };
 
@@ -95,6 +145,8 @@ export function Navbar({
     { label: "MedSutra AI", href: "/medsutra", icon: <Sparkles className="w-3.5 h-3.5 inline-block mr-1 text-amber-300" /> },
   ];
 
+  const currentRole = sessionUser.role || (activeRole as UserRole) || "family_manager";
+
   return (
     <>
       <header className="sticky top-0 z-50 bg-[#2d4a3e] text-white shadow-md border-b border-[#243c32]">
@@ -103,7 +155,7 @@ export function Navbar({
             {/* Logo Brand */}
             <div className="flex items-center space-x-3">
               <a
-                href="/dashboard"
+                href={currentRole === "owner" ? "/elder" : "/dashboard"}
                 className="flex items-center space-x-2.5 text-white focus:outline-none focus:ring-2 focus:ring-emerald-300 rounded-lg p-1"
                 aria-label="Guardian Oasis Home"
               >
@@ -141,14 +193,14 @@ export function Navbar({
 
             {/* Right tool actions */}
             <div className="flex items-center space-x-2 sm:space-x-3">
-              {/* Passcode Access Trigger button */}
+              {/* Passcode Access Button */}
               <button
                 onClick={() => setIsPasscodeModalOpen(true)}
                 className="inline-flex items-center space-x-1.5 text-xs bg-[#22392f] hover:bg-[#1a2c24] text-emerald-300 px-2.5 py-1.5 rounded-lg border border-[#375a4a] transition-colors"
                 title="Secure Passcode Access Gateway"
               >
                 <Lock className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Passcode Access</span>
+                <span className="hidden sm:inline">Passcode</span>
               </button>
 
               {/* AI Daily Care Brief button */}
@@ -215,42 +267,52 @@ export function Navbar({
                 </button>
               )}
 
-              {/* Role Switcher Pill */}
+              {/* Role Indicator & Authenticated Session Tag */}
               <div className="flex items-center bg-[#1d3128] rounded-full p-1 border border-[#375a4a] text-xs">
                 <button
-                  onClick={() => onRoleChange("owner")}
+                  onClick={() => handleRolePillClick("owner")}
                   className={`px-2.5 py-1 rounded-full transition-all ${
-                    activeRole === "owner"
+                    currentRole === "owner"
                       ? "bg-emerald-600 text-white font-semibold shadow-sm"
                       : "text-emerald-300 hover:text-white"
                   }`}
-                  title="Elder Mode: Simple, Large Buttons"
+                  title="Older Adult Mode (Click to authenticate)"
                 >
                   Older Adult
                 </button>
                 <button
-                  onClick={() => onRoleChange("family_manager")}
+                  onClick={() => handleRolePillClick("family_manager")}
                   className={`px-2.5 py-1 rounded-full transition-all ${
-                    activeRole === "family_manager"
+                    currentRole === "family_manager"
                       ? "bg-emerald-600 text-white font-semibold shadow-sm"
                       : "text-emerald-300 hover:text-white"
                   }`}
-                  title="Family Manager Mode: Full Overview"
+                  title="Family Mode (Click to authenticate)"
                 >
                   Family
                 </button>
                 <button
-                  onClick={() => onRoleChange("caregiver")}
+                  onClick={() => handleRolePillClick("caregiver")}
                   className={`px-2.5 py-1 rounded-full transition-all ${
-                    activeRole === "caregiver"
+                    currentRole === "caregiver"
                       ? "bg-emerald-600 text-white font-semibold shadow-sm"
                       : "text-emerald-300 hover:text-white"
                   }`}
-                  title="Caregiver Mode: CareLoop Task Inbox"
+                  title="Caregiver Mode (Click to authenticate)"
                 >
                   Caregiver
                 </button>
               </div>
+
+              {/* Functional Logout Option */}
+              <button
+                onClick={handleLogout}
+                className="p-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700/50 transition-colors"
+                title="Log out of CareOrbit"
+                aria-label="Log out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>

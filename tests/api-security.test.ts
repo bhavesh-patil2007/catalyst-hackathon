@@ -3,6 +3,10 @@ import { GET as getTodayCare } from "../src/app/api/care/today/route";
 import { GET as getWatchdog, POST as postWatchdog } from "../src/app/api/care/cron-watchdog/route";
 import { POST as postElderPin } from "../src/app/api/auth/elder-pin/route";
 import { POST as postCircleCode } from "../src/app/api/auth/circle-code/route";
+import { POST as postLogout } from "../src/app/api/auth/logout/route";
+import { POST as postTestEmail } from "../src/app/api/notifications/test-email/route";
+import { POST as postAppointmentReminder } from "../src/app/api/notifications/appointment-reminder/route";
+import { POST as postMedication } from "../src/app/api/medications/route";
 import { isValidFileSignature } from "../src/lib/fileValidation";
 import { getActorFromSessionOrHeader } from "../src/lib/authGuard";
 import { getSessionSecret } from "../src/lib/session";
@@ -93,7 +97,104 @@ describe("CareOrbit Production Hardening & Route Security Tests", () => {
     });
   });
 
-  describe("4. CareLoop Cron Watchdog Protection", () => {
+  describe("4. Role-Specific Server-Side Circle Invitation Verification", () => {
+    it("should authenticate valid elder PIN and redirect to /elder", async () => {
+      const request = new Request("http://localhost:3000/api/auth/elder-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: "1234" }),
+      });
+
+      const response = await postElderPin(request);
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.role).toBe("owner");
+      expect(data.redirectUrl).toBe("/elder");
+    });
+
+    it("should reject invalid elder PIN", async () => {
+      const request = new Request("http://localhost:3000/api/auth/elder-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: "9999" }),
+      });
+
+      const response = await postElderPin(request);
+      expect(response.status).toBe(401);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Incorrect PIN");
+    });
+
+    it("should assign family_manager role and redirect to /dashboard for OASIS-7629", async () => {
+      const request = new Request("http://localhost:3000/api/auth/circle-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "OASIS-7629", name: "Sarah Thompson" }),
+      });
+
+      const response = await postCircleCode(request);
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.role).toBe("family_manager");
+      expect(data.redirectUrl).toBe("/dashboard");
+    });
+
+    it("should assign caregiver role and redirect to /caregiver for CAREGIVER-4192", async () => {
+      const request = new Request("http://localhost:3000/api/auth/circle-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "CAREGIVER-4192", name: "Marcus Rivera" }),
+      });
+
+      const response = await postCircleCode(request);
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.role).toBe("caregiver");
+      expect(data.redirectUrl).toBe("/caregiver");
+    });
+
+    it("should assign read_only role and redirect to /timeline for OBSERVER-8301", async () => {
+      const request = new Request("http://localhost:3000/api/auth/circle-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "OBSERVER-8301", name: "Dr. Observer" }),
+      });
+
+      const response = await postCircleCode(request);
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.role).toBe("read_only");
+      expect(data.redirectUrl).toBe("/timeline");
+    });
+
+    it("should reject invalid circle invite code", async () => {
+      const request = new Request("http://localhost:3000/api/auth/circle-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "INVALID-CODE-999" }),
+      });
+
+      const response = await postCircleCode(request);
+      expect(response.status).toBe(401);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Invalid or expired");
+    });
+
+    it("should support logout endpoint", async () => {
+      const response = await postLogout();
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+    });
+  });
+
+  describe("5. CareLoop Cron Watchdog Protection", () => {
     it("should reject GET requests with 405 Method Not Allowed", async () => {
       const response = await getWatchdog();
       expect(response.status).toBe(405);
@@ -133,7 +234,66 @@ describe("CareOrbit Production Hardening & Route Security Tests", () => {
     });
   });
 
-  describe("5. MedSutra Binary Magic-Byte File Validation", () => {
+  describe("6. Notification Route Authentication", () => {
+    it("should reject unauthenticated calls to /api/notifications/test-email with 401", async () => {
+      (process.env as any).NODE_ENV = "production";
+      const request = new Request("http://localhost:3000/api/notifications/test-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipientEmail: "test@example.com",
+          recipientRole: "Family Member",
+          type: "DOSE_DUE",
+        }),
+      });
+
+      const response = await postTestEmail(request);
+      expect(response.status).toBe(401);
+    });
+
+    it("should reject unauthenticated calls to /api/notifications/appointment-reminder with 401", async () => {
+      (process.env as any).NODE_ENV = "production";
+      const request = new Request("http://localhost:3000/api/notifications/appointment-reminder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appointmentId: "appt-dr-vance",
+        }),
+      });
+
+      const response = await postAppointmentReminder(request);
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe("7. Role-Based Mutation Guard (Read-Only Restriction)", () => {
+    it("should reject medication creation by read_only members with 403 Forbidden", async () => {
+      const request = new Request("http://localhost:3000/api/medications", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-guardian-role": "read_only",
+          "x-guardian-actor-name": "Observer",
+        },
+        body: JSON.stringify({
+          name: "Unauthorized Drug",
+          dosage: "100 mg",
+          instructions: "Take once",
+          scheduleTime: "08:00 AM",
+          slot: "morning",
+          reason: "Unauthorized attempt",
+        }),
+      });
+
+      const response = await postMedication(request);
+      expect(response.status).toBe(403);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Forbidden");
+    });
+  });
+
+  describe("8. MedSutra Binary Magic-Byte File Validation", () => {
     it("should accept valid JPEG magic bytes (FF D8 FF)", () => {
       const jpegBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
       const result = isValidFileSignature(jpegBuffer);
@@ -162,7 +322,7 @@ describe("CareOrbit Production Hardening & Route Security Tests", () => {
     });
   });
 
-  describe("6. Caregiver Wellbeing Server-Side Privacy Filtering", () => {
+  describe("9. Caregiver Wellbeing Server-Side Privacy Filtering", () => {
     beforeEach(() => {
       clearCheckInsForTesting();
     });
@@ -231,7 +391,7 @@ describe("CareOrbit Production Hardening & Route Security Tests", () => {
     });
   });
 
-  describe("7. Notification Reliability & PHI Masking", () => {
+  describe("10. Notification Reliability & PHI Masking", () => {
     it("should mask email addresses to protect PHI in logs", () => {
       expect(maskEmail("sarah.thompson@family.org")).toBe("s***@family.org");
       expect(maskEmail("doctor.jones@clinic.care")).toBe("d***@clinic.care");
@@ -265,7 +425,7 @@ describe("CareOrbit Production Hardening & Route Security Tests", () => {
     });
   });
 
-  describe("8. Session Secret Enforcement in Production Startup", () => {
+  describe("11. Session Secret Enforcement in Production Startup", () => {
     it("should throw a fatal error in production if IRON_SESSION_SECRET is missing", () => {
       (process.env as any).NODE_ENV = "production";
       delete process.env.IRON_SESSION_SECRET;

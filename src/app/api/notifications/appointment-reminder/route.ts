@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
 import { dispatchProactiveEmail } from "@/lib/notificationService";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const reminderSchema = z.object({
   appointmentId: z.string().min(1, "appointmentId is required"),
@@ -9,6 +10,17 @@ const reminderSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    // 1. Enforce authentication: strictly authenticated members can trigger appointment notifications
+    const authResult = await getActorFromSessionOrHeader(request, [
+      "owner",
+      "family_manager",
+      "caregiver",
+    ]);
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
     const body = await request.json();
     const validated = reminderSchema.parse(body);
 
@@ -49,47 +61,48 @@ export async function POST(request: Request) {
             <td style="padding:8px;">${appointment.clinicName}</td>
           </tr>
           <tr>
+            <td style="padding:8px;font-weight:bold;background:#f0faf5;">Address</td>
+            <td style="padding:8px;">${appointment.address}</td>
+          </tr>
+          <tr>
             <td style="padding:8px;font-weight:bold;background:#f0faf5;">Date &amp; Time</td>
-            <td style="padding:8px;">${appointment.dateLabel ?? appointment.dateTime} at ${appointment.timeLabel ?? ""}</td>
+            <td style="padding:8px;">${appointment.dateLabel} at ${appointment.timeLabel}</td>
           </tr>
           <tr>
             <td style="padding:8px;font-weight:bold;background:#f0faf5;">Transport</td>
-            <td style="padding:8px;">${appointment.transportAssigned ? appointment.transportDetails ?? "Arranged" : "Not yet arranged"}</td>
+            <td style="padding:8px;">${appointment.transportAssigned ? "Arranged" : "Action Needed"}</td>
           </tr>
         </table>
         ${
-          appointment.questionsToAsk?.length
-            ? `<p><strong>Questions to ask:</strong></p><ul>${appointment.questionsToAsk.map((q) => `<li>${q}</li>`).join("")}</ul>`
+          appointment.questionsToAsk && appointment.questionsToAsk.length > 0
+            ? `<p><strong>Questions to Ask:</strong></p><ul>${appointment.questionsToAsk.map((q) => `<li>${q}</li>`).join("")}</ul>`
             : ""
         }
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;" />
-        <p style="font-size:12px;color:#888;">Guardian Oasis &mdash; Care coordination made simple.</p>
+        <p style="font-size:12px;color:#888;">This reminder was dispatched by Guardian Oasis CareLoop proactive notification service.</p>
       </div>
     `;
 
     const results = [];
-    for (const member of recipients) {
-      const dedupeKey = `appt-reminder-${appointment.id}-${member.email}-${new Date().toISOString().slice(0, 10)}`;
-      const result = await dispatchProactiveEmail({
+    const today = new Date().toISOString().slice(0, 10);
+
+    for (const recipient of recipients) {
+      const dedupeKey = `appt-reminder-${appointment.id}-${recipient.email}-${today}`;
+      const dispatchResult = await dispatchProactiveEmail({
         dedupeKey,
-        recipientEmail: member.email,
-        recipientRole: member.role,
+        recipientEmail: recipient.email,
+        recipientRole: recipient.role,
         type: "APPOINTMENT_REMINDER",
         subject,
         htmlContent,
         bodyPreview,
       });
-      results.push({ email: member.email, status: result.status, dispatched: result.dispatched });
+      results.push({ email: recipient.email, ...dispatchResult });
     }
 
     return NextResponse.json({
       success: true,
-      appointment: {
-        id: appointment.id,
-        doctorName: appointment.doctorName,
-        dateLabel: appointment.dateLabel,
-      },
-      recipientCount: recipients.length,
+      message: `Appointment reminder processed for ${recipients.length} care circle member(s).`,
       results,
     });
   } catch (error) {
@@ -97,7 +110,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }
     return NextResponse.json(
-      { success: false, error: "Failed to send appointment reminder" },
+      { success: false, error: "Failed to dispatch appointment reminder" },
       { status: 500 }
     );
   }

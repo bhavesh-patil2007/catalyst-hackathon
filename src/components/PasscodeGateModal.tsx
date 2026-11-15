@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { Lock, AlertCircle } from "lucide-react";
+import { Lock, AlertCircle, KeyRound, Users, ArrowRight } from "lucide-react";
 import { UserRole } from "@/types";
+import { useRouter } from "next/navigation";
 
 interface PasscodeGateModalProps {
   isOpen: boolean;
@@ -16,15 +17,12 @@ export function PasscodeGateModal({
   isOpen,
   onClose,
   onSuccess,
-  elderPin = "1234",
-  circleInviteCode = "OASIS-7629",
 }: PasscodeGateModalProps) {
+  const router = useRouter();
   const [mode, setMode] = useState<"elder" | "circle">("elder");
   const [pinDigits, setPinDigits] = useState<string[]>(["", "", "", ""]);
   const [inviteInput, setInviteInput] = useState("");
   const [nameInput, setNameInput] = useState("");
-  const [emailInput, setEmailInput] = useState("");
-  const [selectedRole, setSelectedRole] = useState<UserRole>("family_manager");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -53,10 +51,12 @@ export function PasscodeGateModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pin: fullPin }),
         });
-        if (res.ok) {
+        const data = await res.json();
+        if (res.ok && data.success) {
           onSuccess("owner");
+          router.push(data.redirectUrl || "/elder");
+          onClose();
         } else {
-          const data = await res.json().catch(() => ({}));
           setErrorMsg(data.error ?? "Incorrect 4-digit PIN. Try '1234'");
           setPinDigits(["", "", "", ""]);
           document.getElementById("pin-digit-0")?.focus();
@@ -81,15 +81,20 @@ export function PasscodeGateModal({
         body: JSON.stringify({
           code: inviteInput.trim(),
           name: nameInput.trim() || undefined,
-          email: emailInput.trim() || undefined,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        onSuccess(data.role ?? selectedRole);
+      const data = await res.json();
+      if (res.ok && data.success) {
+        // Strictly use server-assigned role from invitation verification
+        const verifiedRole: UserRole = data.role;
+        onSuccess(verifiedRole);
+        router.push(data.redirectUrl || "/dashboard");
+        onClose();
       } else {
-        const data = await res.json().catch(() => ({}));
-        setErrorMsg(data.error ?? `Invalid Circle Code. Use demo code '${circleInviteCode}'`);
+        setErrorMsg(
+          data.error ??
+            "Invalid circle code. Use demo codes: OASIS-7629 (Family), CAREGIVER-4192 (Caregiver), OBSERVER-8301 (Read-Only)"
+        );
       }
     } catch {
       setErrorMsg("Network error. Please try again.");
@@ -99,161 +104,145 @@ export function PasscodeGateModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in">
-      <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-gray-200 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 w-full max-w-md overflow-hidden animate-scale-in">
         {/* Header */}
-        <div className="bg-[#2d4a3e] p-6 text-white text-center">
-          <div className="w-12 h-12 rounded-full bg-[#3d6554] border border-[#558d73] flex items-center justify-center mx-auto mb-3 text-emerald-200 shadow-inner">
-            <Lock className="w-6 h-6" />
+        <div className="bg-gradient-to-r from-[#2d4a3e] to-[#243c32] text-white p-6 relative">
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 text-emerald-200 hover:text-white p-1 rounded-lg"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300 mb-2">
+            <Lock className="w-5 h-5" />
           </div>
-          <h3 className="font-serif font-bold text-xl">Secure Passcode Access</h3>
-          <p className="text-xs text-emerald-200 mt-1">
-            Care profile access for Eleanor Thompson
+          <h3 className="font-serif text-xl font-bold">Passcode Access Gateway</h3>
+          <p className="text-xs text-emerald-100/90 mt-0.5">
+            Authenticate to access Eleanor Thompson&apos;s healthcare profile
           </p>
 
-          {/* Toggle between Elder Quick PIN vs Care Circle Passcode */}
-          <div className="mt-4 flex bg-[#1d3128] p-1 rounded-xl border border-[#375a4a] text-xs">
+          {/* Mode Switcher */}
+          <div className="mt-4 flex bg-[#1a2c24] p-1 rounded-xl border border-emerald-700/50">
             <button
               onClick={() => {
                 setMode("elder");
                 setErrorMsg(null);
               }}
-              className={`flex-1 py-1.5 rounded-lg font-semibold transition-all ${
-                mode === "elder" ? "bg-emerald-600 text-white shadow-xs" : "text-emerald-300"
+              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1 transition-all ${
+                mode === "elder" ? "bg-emerald-600 text-white shadow" : "text-emerald-200"
               }`}
             >
-              Older Adult (4-Digit PIN)
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>Elder PIN (4 Digits)</span>
             </button>
             <button
               onClick={() => {
                 setMode("circle");
                 setErrorMsg(null);
               }}
-              className={`flex-1 py-1.5 rounded-lg font-semibold transition-all ${
-                mode === "circle" ? "bg-emerald-600 text-white shadow-xs" : "text-emerald-300"
+              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center space-x-1 transition-all ${
+                mode === "circle" ? "bg-emerald-600 text-white shadow" : "text-emerald-200"
               }`}
             >
-              Care Circle Code
+              <Users className="w-3.5 h-3.5" />
+              <span>Care Circle Code</span>
             </button>
           </div>
         </div>
 
-        {/* Form Body */}
+        {/* Body */}
         <div className="p-6">
-          {mode === "elder" ? (
-            <div className="text-center">
-              <p className="text-xs text-gray-600 mb-4">
-                Enter your senior quick 4-digit PIN to open your simplified Today view:
-              </p>
+          {errorMsg && (
+            <div className="mb-4 flex items-center space-x-2 text-rose-700 bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-xs">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
 
-              {/* 4 Digit PIN inputs */}
-              <div className="flex justify-center space-x-3 mb-4">
+          {mode === "elder" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-gray-600 text-center">
+                Enter Eleanor&apos;s 4-digit PIN for direct senior access:
+              </p>
+              <div className="flex justify-center space-x-3">
                 {pinDigits.map((digit, idx) => (
                   <input
                     key={idx}
                     id={`pin-digit-${idx}`}
                     type="password"
+                    inputMode="numeric"
                     maxLength={1}
                     value={digit}
-                    disabled={loading}
                     onChange={(e) => handleDigitChange(idx, e.target.value)}
-                    className="w-12 h-14 text-center text-2xl font-bold rounded-xl border-2 border-gray-300 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-200 outline-none transition-all disabled:opacity-50"
+                    className="w-12 h-14 text-center text-xl font-bold border-2 rounded-xl border-gray-300 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-200 transition-all font-mono"
+                    autoFocus={idx === 0}
                   />
                 ))}
               </div>
-
-              {loading && (
-                <p className="text-xs text-emerald-600 font-medium animate-pulse mb-2">
-                  Verifying…
-                </p>
-              )}
-
-              <p className="text-[11px] text-gray-400 font-mono">
-                Demo Elder PIN: <strong>{elderPin}</strong>
+              <p className="text-[11px] text-gray-400 text-center">
+                Demo elder PIN: <span className="font-mono font-bold text-gray-700">1234</span>
               </p>
             </div>
           ) : (
-            <form onSubmit={handleCircleSubmit} className="space-y-4">
-              <p className="text-xs text-gray-600">
-                Authorized family members and caregivers: Enter your household access code to sign in.
-              </p>
-
+            <form onSubmit={handleCircleSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Circle Invite / Access Code
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                  Invitation Code
                 </label>
                 <input
                   type="text"
                   required
                   value={inviteInput}
-                  onChange={(e) => {
-                    setInviteInput(e.target.value);
-                    setErrorMsg(null);
-                  }}
-                  placeholder="e.g. OASIS-7629"
-                  className="w-full text-center tracking-widest uppercase font-mono font-bold text-sm border border-gray-300 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  onChange={(e) => setInviteInput(e.target.value.toUpperCase())}
+                  placeholder="e.g., OASIS-7629"
+                  className="w-full px-3 py-2 border rounded-xl font-mono text-sm uppercase focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Your Name (optional)
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                  Your Name (Optional)
                 </label>
                 <input
                   type="text"
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
                   placeholder="e.g. Sarah Thompson"
-                  className="w-full text-sm border border-gray-300 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 border rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Accessing As
-                </label>
-                <select
-                  value={selectedRole}
-                  onChange={(e) => setSelectedRole(e.target.value as UserRole)}
-                  className="w-full text-xs border border-gray-300 rounded-xl p-2.5 bg-white text-gray-900"
-                >
-                  <option value="family_manager">Family Manager (Sarah Thompson)</option>
-                  <option value="caregiver">Assigned Caregiver (Priya Sharma, RN)</option>
-                  <option value="read_only">Family Member - View Only (David)</option>
-                </select>
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-[#2d4a3e] hover:bg-[#385b4c] text-white text-xs font-bold py-3 rounded-xl shadow-xs transition-colors disabled:opacity-60"
+                className="w-full mt-2 bg-[#2d4a3e] hover:bg-[#243c32] text-white font-semibold py-2.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-1"
               >
-                {loading ? "Authenticating…" : "Authenticate & Access Profile"}
+                {loading ? (
+                  <span>Verifying...</span>
+                ) : (
+                  <>
+                    <span>Verify Passcode & Enter</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
 
-              <p className="text-[11px] text-gray-400 text-center font-mono">
-                Demo Code: <strong>{circleInviteCode}</strong>
-              </p>
+              <div className="mt-3 p-2.5 bg-gray-50 rounded-xl border border-gray-200 text-[11px] space-y-1">
+                <div className="font-semibold text-gray-700">Role-Specific Demo Codes:</div>
+                <div className="flex justify-between text-gray-600">
+                  <span>Family Manager:</span> <code className="font-bold text-emerald-800">OASIS-7629</code>
+                </div>
+                <div className="flex justify-between text-gray-600">
+                  <span>Caregiver:</span> <code className="font-bold text-blue-800">CAREGIVER-4192</code>
+                </div>
+                <div className="flex justify-between text-gray-600">
+                  <span>Read-Only:</span> <code className="font-bold text-purple-800">OBSERVER-8301</code>
+                </div>
+              </div>
             </form>
           )}
-
-          {errorMsg && (
-            <div className="mt-4 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center justify-center space-x-1.5">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-between items-center text-xs">
-          <span className="text-gray-400">Security &amp; Privacy by Design</span>
-          <button
-            onClick={onClose}
-            className="text-gray-600 hover:text-gray-900 font-medium"
-          >
-            Cancel
-          </button>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
 import { dispatchProactiveEmail } from "@/lib/notificationService";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const emailTestSchema = z.object({
   recipientEmail: z.string().email(),
@@ -12,6 +13,16 @@ const emailTestSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    // 1. Enforce authentication: strictly authenticated owners and family managers can trigger test emails
+    const authResult = await getActorFromSessionOrHeader(request, [
+      "owner",
+      "family_manager",
+    ]);
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
     const body = await request.json();
     const validated = emailTestSchema.parse(body);
 
@@ -48,7 +59,7 @@ export async function POST(request: Request) {
           Patient Profile: <strong>${profile.displayName}</strong>
         </div>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0;" />
-        <p style="font-size:11px;color:#888;">Care coordination powered by CareLoop &bull; ${new Date().toISOString()}</p>
+        <p style="font-size:12px;color:#888;">This is an enterprise care notification dispatched by Guardian Oasis CareLoop Proactive Dispatcher.</p>
       </div>
     `;
 
@@ -64,32 +75,19 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      delivered: result.dispatched,
-      deduplicated: result.deduplicated,
-      status: result.status,
-      providerError: result.providerError,
-      message: result.deduplicated
-        ? "Duplicate email was suppressed by deduplication key."
-        : result.dispatched
-        ? "Live proactive email delivered via Resend."
-        : result.status === "CONFIG_REQUIRED"
-        ? "Notification recorded as CONFIG_REQUIRED (RESEND_API_KEY is not configured)."
-        : `Email delivery failed: ${result.providerError}`,
-      notification: {
-        recipientEmail: validated.recipientEmail,
-        subject,
-        bodyPreview,
-        dedupeKey,
-        sentAt: timeString,
-        jobId: result.jobId,
-      },
+      message: result.dispatched
+        ? `Proactive email delivered to ${validated.recipientEmail}`
+        : result.deduplicated
+        ? "Notification was suppressed (already dispatched today)"
+        : "Email logged in CareLoop ledger (RESEND_API_KEY unconfigured).",
+      data: result,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }
     return NextResponse.json(
-      { success: false, error: "Failed to dispatch notification" },
+      { success: false, error: "Failed to dispatch test notification" },
       { status: 500 }
     );
   }

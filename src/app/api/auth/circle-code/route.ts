@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { INITIAL_PROFILE } from "@/lib/store";
 import { getSession } from "@/lib/session";
-import { isDemoCredential, verifySecret, DEMO_CREDENTIALS } from "@/lib/authCrypto";
+import { isDemoCredential, verifyCircleInvitation } from "@/lib/authCrypto";
+import { UserRole } from "@/types";
 
 // In-memory IP rate limiter: 5 attempts per minute
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
@@ -22,6 +23,21 @@ function checkRateLimit(ip: string): boolean {
 
   entry.count += 1;
   return true;
+}
+
+function getRoleRedirect(role: UserRole): string {
+  switch (role) {
+    case "owner":
+      return "/elder";
+    case "caregiver":
+      return "/caregiver";
+    case "family_manager":
+      return "/dashboard";
+    case "read_only":
+      return "/timeline";
+    default:
+      return "/dashboard";
+  }
 }
 
 export async function POST(request: Request) {
@@ -45,12 +61,12 @@ export async function POST(request: Request) {
 
     if (!code || typeof code !== "string") {
       return NextResponse.json(
-        { success: false, error: "Circle code is required" },
+        { success: false, error: "Circle invite code is required" },
         { status: 400 }
       );
     }
 
-    // Reject hardcoded demo credentials in production environments
+    // In production, reject known demo codes
     if (process.env.NODE_ENV === "production" && isDemoCredential(code)) {
       return NextResponse.json(
         {
@@ -61,31 +77,39 @@ export async function POST(request: Request) {
       );
     }
 
-    // Verify invite code using salted scrypt hashing
-    const isValid = verifySecret(
-      code.trim().toUpperCase(),
-      DEMO_CREDENTIALS.circleCode.hash,
-      DEMO_CREDENTIALS.circleCode.salt
-    );
+    // Verify invite code and derive server-determined role
+    const verification = verifyCircleInvitation(code);
 
-    if (!isValid) {
+    if (!verification.valid || !verification.role) {
       return NextResponse.json(
-        { success: false, error: "Invalid circle code" },
+        { success: false, error: "Invalid or expired circle invitation code." },
         { status: 401 }
       );
     }
 
+    const assignedRole = verification.role;
+    const defaultName =
+      assignedRole === "caregiver"
+        ? "Primary Caregiver"
+        : assignedRole === "read_only"
+        ? "Care Circle Observer"
+        : "Care Circle Member";
+
+    const memberName = name?.trim() || defaultName;
+
     const session = await getSession();
     session.authenticated = true;
-    session.role = "family_manager";
+    session.role = assignedRole;
     session.profileId = INITIAL_PROFILE.id;
-    session.memberName = name?.trim() || "Care Circle Member";
+    session.memberName = memberName;
     await session.save();
 
     return NextResponse.json({
       success: true,
-      role: "family_manager",
-      memberName: session.memberName,
+      role: assignedRole,
+      memberName,
+      invitationLabel: verification.label,
+      redirectUrl: getRoleRedirect(assignedRole),
       email: email?.trim() || undefined,
     });
   } catch {

@@ -33,10 +33,11 @@ export default function HomePage() {
 
           <div className="flex items-center space-x-3 text-xs">
             <Link
-              href="/dashboard"
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2 rounded-xl transition-all shadow-sm"
+              href="/login"
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2 rounded-xl transition-all shadow-sm flex items-center space-x-1.5"
             >
-              Enter Live Dashboard &rarr;
+              <ShieldCheck className="w-4 h-4" />
+              <span>Enter Passcode / Sign In &rarr;</span>
             </Link>
           </div>
         </div>

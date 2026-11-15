@@ -12,6 +12,7 @@ const PROTECTED_PATHS = [
   "/medsutra",
 ];
 
+const PUBLIC_EXACT_PATHS = ["/", "/login"];
 const PUBLIC_API_PREFIXES = ["/api/auth", "/api/health"];
 
 export function middleware(request: NextRequest) {
@@ -26,9 +27,9 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Allow public landing and public API endpoints
+  // Allow public landing, public login, and public API endpoints
   if (
-    pathname === "/" ||
+    PUBLIC_EXACT_PATHS.includes(pathname) ||
     PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   ) {
     return NextResponse.next();
@@ -39,8 +40,9 @@ export function middleware(request: NextRequest) {
   const sessionCookie = request.cookies.get("guardian_session");
 
   if (isProtectedPage && !sessionCookie) {
-    const url = new URL("/", request.url);
-    url.searchParams.set("auth", "required");
+    // Redirect unauthenticated visitors directly to /login to eliminate redirect loops and deadlock
+    const url = new URL("/login", request.url);
+    url.searchParams.set("redirect", pathname);
     return NextResponse.redirect(url);
   }
 

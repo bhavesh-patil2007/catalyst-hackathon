@@ -82,6 +82,7 @@ export async function POST(request: Request) {
       success: true,
       role: "owner",
       memberName: INITIAL_PROFILE.displayName,
+      redirectUrl: "/elder",
     });
   } catch {
     return NextResponse.json(
