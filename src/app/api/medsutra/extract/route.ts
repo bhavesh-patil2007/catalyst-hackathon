@@ -1,17 +1,17 @@
-import { isValidFileSignature } from "@/lib/fileValidation";
+import { isValidFileSignature, isValidFileExtension, ALLOWED_MIME_TYPES } from "@/lib/fileValidation";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const ExtractionSchema = z.object({
-  name: z.string(),
-  dosage: z.string(),
-  frequency: z.string(),
-  duration: z.string(),
-  instructions: z.string(),
+  name: z.string().min(1).max(200),
+  dosage: z.string().min(1).max(100),
+  frequency: z.string().min(1).max(200),
+  duration: z.string().min(1).max(100),
+  instructions: z.string().min(1).max(500),
   confidence: z.enum(["high", "medium", "low"]),
   uncertain_fields: z.array(z.string()),
-  plain_language_explanation: z.string(),
+  plain_language_explanation: z.string().min(5).max(1000),
   plain_language_hi: z.string().optional(),
   plain_language_mr: z.string().optional(),
   handwriting_alert: z.string().optional(),
@@ -118,7 +118,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. File size validation (max 10MB)
+    // 4. File extension validation
+    if (!isValidFileExtension(file.name)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid file extension. Only .jpg, .jpeg, .png, .webp, or .pdf files are accepted.",
+        },
+        { status: 400, headers: { "X-Verification-Required": "true" } }
+      );
+    }
+
+    // 5. Declared MIME type validation
+    if (file.type && !ALLOWED_MIME_TYPES.includes(file.type)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Unsupported MIME type. Only JPEG, PNG, WebP or PDF documents are accepted.",
+        },
+        { status: 400, headers: { "X-Verification-Required": "true" } }
+      );
+    }
+
+    // 6. File size validation (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
       return NextResponse.json(
         { success: false, error: "File exceeds 10MB limit" },
@@ -126,7 +148,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Binary magic-byte signature validation (prevents MIME type spoofing)
+    // 7. Binary magic-byte signature validation (prevents MIME type spoofing)
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const signatureCheck = isValidFileSignature(buffer);
@@ -150,7 +172,8 @@ export async function POST(request: NextRequest) {
           success: true,
           source: "demo",
           extractions: DEMO_EXTRACTIONS,
-          message: "Processed via MedSutra demo mode (GEMINI_API_KEY not configured).",
+          message:
+            "Processed via MedSutra demo mode (GEMINI_API_KEY not configured). Pre-packaged demonstration templates loaded; these were NOT extracted from the uploaded file.",
         },
         { headers: { "X-Verification-Required": "true" } }
       );

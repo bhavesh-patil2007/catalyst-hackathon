@@ -1,3 +1,11 @@
+export const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".pdf"];
+export const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+export function isValidFileExtension(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
 /**
  * Validates actual binary magic bytes of the uploaded file to prevent MIME type spoofing.
  */

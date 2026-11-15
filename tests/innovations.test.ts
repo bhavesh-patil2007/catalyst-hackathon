@@ -1,123 +1,322 @@
-import { describe, it, expect } from "vitest";
-import { guardianStore } from "../src/lib/store";
-import { addCheckIn, getBurnoutRisk, getHistory } from "../src/lib/wellbeingStore";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { POST as extractHandler } from "../src/app/api/medsutra/extract/route";
+import { POST as createMedHandler } from "../src/app/api/medications/route";
+import { POST as checkinHandler } from "../src/app/api/wellbeing/checkin/route";
+import { GET as historyHandler } from "../src/app/api/wellbeing/history/route";
+import { POST as taskHandler } from "../src/app/api/tasks/route";
+import { NextRequest } from "next/server";
 
 describe("CareOrbit Innovations Verification: MedSutra AI & Caregiver Wellbeing", () => {
+  beforeEach(() => {
+    (process.env as any).NODE_ENV = "test";
+    process.env.ENABLE_TEST_AUTH_HEADERS = "true";
+  });
+
+  afterEach(() => {
+    (process.env as any).NODE_ENV = "test";
+  });
+
   describe("Module A: MedSutra AI Prescription Intelligence", () => {
-    it("should provide structured extractions with confidence scores and multilingual explanations", () => {
-      const mockExtraction = {
-        name: "Metformin ER",
-        dosage: "500 mg",
-        frequency: "Once daily with breakfast",
-        duration: "90 days",
-        instructions: "Take with food and full glass of water",
-        confidence: "high" as const,
-        uncertain_fields: [],
-        plain_language_explanation:
-          "Helps manage blood glucose levels for Type 2 Diabetes by reducing liver glucose production.",
-        plain_language_hi:
-          "यह दवा टाइप 2 मधुमेह के लिए रक्त शर्करा को नियंत्रित करने में मदद करती है।",
-        plain_language_mr:
-          "हे औषध टाइप २ मधुमेहासाठी रक्तातील साखर नियंत्रित ठेवण्यास मदत करते.",
-        handwriting_alert: undefined,
-      };
-
-      expect(mockExtraction.confidence).toBe("high");
-      expect(mockExtraction.plain_language_hi).toContain("मधुमेह");
-      expect(mockExtraction.plain_language_mr).toContain("मधुमेहासाठी");
-      expect(mockExtraction.uncertain_fields.length).toBe(0);
-    });
-
-    it("should flag unclear handwriting and maintain human-in-the-loop verification guard", () => {
-      const ambiguousExtraction = {
-        name: "Lisinopril",
-        dosage: "10 mg",
-        frequency: "Once daily in morning",
-        duration: "Ongoing",
-        instructions: "Blood pressure tablet",
-        confidence: "medium" as const,
-        uncertain_fields: ["duration"],
-        plain_language_explanation: "Lowers blood pressure to protect heart and kidneys.",
-        handwriting_alert: "Duration handwriting was faded on script",
-      };
-
-      // Failsafe: ensure uncertain fields trigger warnings
-      expect(ambiguousExtraction.confidence).not.toBe("high");
-      expect(ambiguousExtraction.handwriting_alert).toBeDefined();
-
-      // Ensure AI does not auto-create without explicit human approval
-      const initialMedsCount = guardianStore.getMedications().length;
-
-      // Only when human manager approves does it enter the schedule
-      const approvedMed = guardianStore.addMedicationWithVersion({
-        name: ambiguousExtraction.name,
-        dosage: ambiguousExtraction.dosage,
-        instructions: ambiguousExtraction.instructions,
-        scheduleTime: "08:00 AM",
-        slot: "morning",
-        pillColor: "sky",
-        pillShape: "round",
-        reason: "MedSutra prescription extraction verified and approved by Sarah Thompson",
-        authorName: "Sarah Thompson",
+    it("rejects unauthenticated extraction requests", async () => {
+      delete process.env.ENABLE_TEST_AUTH_HEADERS;
+      const formData = new FormData();
+      const req = new NextRequest("http://localhost/api/medsutra/extract", {
+        method: "POST",
+        body: formData,
       });
 
-      expect(approvedMed).toBeDefined();
-      expect(guardianStore.getMedications().length).toBe(initialMedsCount + 1);
+      const res = await extractHandler(req);
+      expect(res.status).toBe(401);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      process.env.ENABLE_TEST_AUTH_HEADERS = "true";
+    });
+
+    it("rejects malicious or invalid file uploads (unsupported extension and fake signature)", async () => {
+      const fakeExecutable = new Blob([new Uint8Array([0x4d, 0x5a, 0x90, 0x00])], {
+        type: "application/x-msdownload",
+      });
+      const formData = new FormData();
+      formData.append("prescription", fakeExecutable, "malicious.exe");
+
+      const req = new NextRequest("http://localhost/api/medsutra/extract", {
+        method: "POST",
+        body: formData,
+        headers: {
+          "x-guardian-role": "family_manager",
+          "x-guardian-actor-name": "Sarah Thompson",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+      });
+
+      const res = await extractHandler(req);
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Invalid file extension");
+    });
+
+    it("rejects spoofed MIME type when magic byte signature does not match", async () => {
+      // Disguise text file as image/jpeg
+      const fakeJpeg = new Blob(["This is a text script, not a jpeg image"], {
+        type: "image/jpeg",
+      });
+      const formData = new FormData();
+      formData.append("prescription", fakeJpeg, "fake.jpg");
+
+      const req = new NextRequest("http://localhost/api/medsutra/extract", {
+        method: "POST",
+        body: formData,
+        headers: {
+          "x-guardian-role": "family_manager",
+          "x-guardian-actor-name": "Sarah Thompson",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+      });
+
+      const res = await extractHandler(req);
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.error).toContain("Invalid file signature");
+    });
+
+    it("distinguishes demo mode cleanly with transparent disclaimer", async () => {
+      // Real JPEG signature: FF D8 FF E0
+      const validJpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+      const validJpeg = new Blob([validJpegBytes], { type: "image/jpeg" });
+      const formData = new FormData();
+      formData.append("prescription", validJpeg, "sample.jpg");
+
+      const req = new NextRequest("http://localhost/api/medsutra/extract", {
+        method: "POST",
+        body: formData,
+        headers: {
+          "x-guardian-role": "family_manager",
+          "x-guardian-actor-name": "Sarah Thompson",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+      });
+
+      const res = await extractHandler(req);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.success).toBe(true);
+      expect(data.source).toBe("demo");
+      expect(data.message).toContain("Pre-packaged demonstration templates loaded");
+      expect(data.extractions.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("requires explicit human approval and prevents duplicate medication creation", async () => {
+      // Step 1: Human reviewer approves new medication
+      const uniqueMedName = "Novel Beta-Blocker " + Date.now();
+      const approveReq = new Request("http://localhost/api/medications", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-guardian-role": "family_manager",
+          "x-guardian-actor-name": "Sarah Thompson",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+        body: JSON.stringify({
+          name: uniqueMedName,
+          dosage: "25 mg",
+          instructions: "Take once daily in morning",
+          slot: "morning",
+          scheduleTime: "08:00 AM",
+          reason: "Approved from MedSutra prescription review",
+        }),
+      });
+
+      const approveRes = await createMedHandler(approveReq);
+      expect(approveRes.status).toBe(201);
+      const approveData = await approveRes.json();
+      expect(approveData.success).toBe(true);
+      expect(approveData.data.name).toBe(uniqueMedName);
+
+      // Step 2: Attempt duplicate submission of same medication name -> must return 409 Conflict
+      const duplicateReq = new Request("http://localhost/api/medications", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-guardian-role": "family_manager",
+          "x-guardian-actor-name": "Sarah Thompson",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+        body: JSON.stringify({
+          name: uniqueMedName,
+          dosage: "50 mg",
+          instructions: "Increased dose attempt",
+          slot: "morning",
+          scheduleTime: "08:00 AM",
+          reason: "Duplicate submission attempt",
+        }),
+      });
+
+      const duplicateRes = await createMedHandler(duplicateReq);
+      expect(duplicateRes.status).toBe(409);
+      const duplicateData = await duplicateRes.json();
+      expect(duplicateData.success).toBe(false);
+      expect(duplicateData.error).toContain("already active");
     });
   });
 
-  describe("Module B: Caregiver Wellbeing & CareLoop Backup Relief", () => {
-    it("should record daily check-in with sleep, mood, stress, and consent settings", () => {
-      const caregiverId = "caregiver-priya-test";
-      const checkin = addCheckIn({
-        caregiverId,
-        sleepHours: 7.5,
-        mood: 4,
-        stress: 4,
-        energy: 4,
-        note: "Eleanor rested well today. Calm afternoon shift.",
-        shareWithFamily: true,
+  describe("Module B: Caregiver Wellbeing & Privacy Guardrails", () => {
+    it("rejects unauthenticated wellbeing check-in", async () => {
+      delete process.env.ENABLE_TEST_AUTH_HEADERS;
+      const req = new NextRequest("http://localhost/api/wellbeing/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sleepHours: 7,
+          mood: 3,
+          stress: 3,
+          energy: 3,
+          shareWithFamily: false,
+        }),
       });
 
-      expect(checkin.id).toBeDefined();
-      expect(checkin.sleepHours).toBe(7.5);
-      expect(checkin.shareWithFamily).toBe(true);
-
-      const history = getHistory(caregiverId);
-      expect(history.length).toBeGreaterThanOrEqual(1);
+      const res = await checkinHandler(req);
+      expect(res.status).toBe(401);
+      process.env.ENABLE_TEST_AUTH_HEADERS = "true";
     });
 
-    it("should calculate 7-day composite score and allow CareLoop backup relief requests without medical burnout diagnosis", () => {
-      const caregiverId = "caregiver-fatigued-shift";
-      // Log exhausted shift scores
-      addCheckIn({
-        caregiverId,
-        sleepHours: 4.0,
-        mood: 1,
-        stress: 1,
-        energy: 1,
-        shareWithFamily: false,
+    it("derives caregiver identity strictly from server session and enforces privacy filtering", async () => {
+      // 1. Caregiver Priya records private check-in
+      const privateCheckinReq = new NextRequest("http://localhost/api/wellbeing/checkin", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-guardian-role": "caregiver",
+          "x-guardian-actor-name": "Priya Sharma, RN",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+        body: JSON.stringify({
+          caregiverId: "attacker-spoofed-id", // must be overridden by session
+          sleepHours: 5,
+          mood: 2,
+          stress: 4,
+          energy: 2,
+          note: "Private confidential notes",
+          shareWithFamily: false, // PRIVATE
+        }),
       });
 
-      const risk = getBurnoutRisk(caregiverId);
-      expect(risk).toBe("high");
+      const privateRes = await checkinHandler(privateCheckinReq);
+      expect(privateRes.status).toBe(201);
+      const savedCheckin = await privateRes.json();
+      const checkinRecord = savedCheckin.checkIn || savedCheckin.data;
+      expect(checkinRecord.caregiverId).toBe("Priya Sharma, RN");
+      expect(checkinRecord.shareWithFamily).toBe(false);
 
-      // Caregiver initiates backup coverage request into CareLoop
-      const backupTask = guardianStore.createBackupRequest({
-        caregiverName: "Priya Sharma, RN",
-        reason: "Wellbeing workload fatigue. Relief coverage requested for tomorrow evening.",
+      // 2. Family manager requests Priya's history -> private record must be hidden
+      const familyReq = new NextRequest(
+        "http://localhost/api/wellbeing/history?caregiverId=Priya%20Sharma,%20RN",
+        {
+          headers: {
+            "x-guardian-role": "family_manager",
+            "x-guardian-actor-name": "Sarah Thompson",
+            "x-guardian-profile-id": "profile-eleanor-thompson",
+          },
+        }
+      );
+
+      const familyRes = await historyHandler(familyReq);
+      expect(familyRes.status).toBe(200);
+      const familyData = await familyRes.json();
+      expect(familyData.privacyEnforced).toBe(true);
+      // Private check-in must not be visible to family
+      const leakedPrivate = familyData.history.find(
+        (h: any) => h.caregiverId === "Priya Sharma, RN" && h.shareWithFamily === false
+      );
+      expect(leakedPrivate).toBeUndefined();
+
+      // 3. Caregiver themselves can view their own private check-in
+      const selfReq = new NextRequest(
+        "http://localhost/api/wellbeing/history?caregiverId=Priya%20Sharma,%20RN",
+        {
+          headers: {
+            "x-guardian-role": "caregiver",
+            "x-guardian-actor-name": "Priya Sharma, RN",
+            "x-guardian-profile-id": "profile-eleanor-thompson",
+          },
+        }
+      );
+
+      const selfRes = await historyHandler(selfReq);
+      expect(selfRes.status).toBe(200);
+      const selfData = await selfRes.json();
+      expect(selfData.privacyEnforced).toBe(false);
+      const ownPrivate = selfData.history.find(
+        (h: any) => h.caregiverId === "Priya Sharma, RN" && h.shareWithFamily === false
+      );
+      expect(ownPrivate).toBeDefined();
+
+      // 4. Peer caregiver is forbidden (403) from accessing another caregiver's records
+      const peerReq = new NextRequest(
+        "http://localhost/api/wellbeing/history?caregiverId=Priya%20Sharma,%20RN",
+        {
+          headers: {
+            "x-guardian-role": "caregiver",
+            "x-guardian-actor-name": "Nurse Joy",
+            "x-guardian-profile-id": "profile-eleanor-thompson",
+          },
+        }
+      );
+
+      const peerRes = await historyHandler(peerReq);
+      expect(peerRes.status).toBe(403);
+      const peerData = await peerRes.json();
+      expect(peerData.success).toBe(false);
+      expect(peerData.error).toContain("Forbidden");
+    });
+
+    it("prevents duplicate backup relief coverage requests in CareLoop", async () => {
+      // 1. Submit initial relief coverage request
+      const req1 = new Request("http://localhost/api/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-guardian-role": "caregiver",
+          "x-guardian-actor-name": "Priya Sharma, RN",
+          "x-guardian-profile-id": "profile-eleanor-thompson",
+        },
+        body: JSON.stringify({
+          action: "backup_request",
+          reason: "High fatigue from back-to-back night shifts",
+        }),
       });
 
-      expect(backupTask).toBeDefined();
-      expect(backupTask.status).toBe("OPEN");
-      expect(backupTask.priority).toBe("URGENT");
-      expect(backupTask.medicationName).toBe("Caregiver Relief Coverage");
+      const res1 = await taskHandler(req1);
+      // If one already existed in the store, it returns 409; otherwise 200 then next returns 409
+      if (res1.status === 200) {
+        const data1 = await res1.json();
+        expect(data1.success).toBe(true);
 
-      // Verify audit trail logged the backup relief request
-      const audit = guardianStore
-        .getAuditEvents()
-        .find((a) => a.action === "BACKUP_REQUESTED" && a.entityId === backupTask.id);
-      expect(audit).toBeDefined();
+        const req2 = new Request("http://localhost/api/tasks", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-guardian-role": "caregiver",
+            "x-guardian-actor-name": "Priya Sharma, RN",
+            "x-guardian-profile-id": "profile-eleanor-thompson",
+          },
+          body: JSON.stringify({
+            action: "backup_request",
+            reason: "Duplicate backup request attempt",
+          }),
+        });
+
+        const res2 = await taskHandler(req2);
+        expect(res2.status).toBe(409);
+        const data2 = await res2.json();
+        expect(data2.success).toBe(false);
+        expect(data2.error).toContain("already pending review");
+      } else {
+        expect(res1.status).toBe(409);
+        const data1 = await res1.json();
+        expect(data1.error).toContain("already pending review");
+      }
     });
   });
 });

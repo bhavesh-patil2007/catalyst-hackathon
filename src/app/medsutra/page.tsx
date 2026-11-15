@@ -211,9 +211,7 @@ export default function MedSutraPage() {
           remainingQuantity: 30,
           dailyFrequency: 1,
           refillThreshold: 7,
-          reason: `Prescription extraction verified via MedSutra AI by family manager`,
-          authorName: "Sarah Thompson (Family Manager)",
-          actorRole: "family_manager",
+          reason: `Prescription extraction verified and approved via MedSutra AI`,
         }),
       });
       const data = await res.json();
@@ -373,6 +371,15 @@ export default function MedSutraPage() {
         {/* Extraction Results */}
         {cards.length > 0 && (
           <div className="space-y-6">
+            {source === "demo" && (
+              <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 text-xs text-amber-900 flex items-start space-x-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="font-bold">Demonstration Template Notice:</strong> Live Google Gemini API is not configured. The extractions below are pre-packaged clinical demonstration templates and were <em>not</em> extracted from your uploaded file.
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-gray-200">
               <div className="flex items-center space-x-2">
                 <span className="font-serif text-lg font-bold text-gray-900">

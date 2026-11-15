@@ -4,9 +4,10 @@
 > *"Everything you need for clearer, calmer caregiving through one easy-to-use, intelligent dashboard."*
 
 [![Build & Typecheck](https://img.shields.io/badge/Build-Passing-brightgreen)]()
-[![Vitest Unit Tests](https://img.shields.io/badge/Tests-13%2F13%20Passed%20(100%25)-success)]()
+[![Vitest Unit Tests](https://img.shields.io/badge/Tests-94%2F94%20Passed%20(100%25)-success)]()
 [![WCAG Accessibility](https://img.shields.io/badge/Accessibility-WCAG%20AAA%20Elder%20First-teal)]()
 [![Framework](https://img.shields.io/badge/Framework-Next.js%2014%20App%20Router-black)]()
+[![Database](https://img.shields.io/badge/Database-Supabase%20PostgreSQL-3ECF8E)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue)]()
 
 ---
@@ -42,92 +43,83 @@ npm test
 
 ### 4. Docker
 ```bash
-docker build -t guardian-oasis .
-docker run -p 3000:3000 guardian-oasis
+docker build -t careorbit .
+docker run -p 8080:8080 careorbit
 ```
 
 ---
 
 ## 🔐 Environment Variables
 
-Copy `.env.example` to `.env.local` and fill in your values:
+Copy `.env.example` to `.env.local` and configure your environment:
 
 | Variable | Description | Required |
 |---|---|---|
-| `RESEND_API_KEY` | Resend API key for email sending | Optional (falls back to log-only) |
-| `RESEND_FROM_EMAIL` | Sender email address | Optional |
-| `NEXT_PUBLIC_APP_URL` | Public URL of the application | Optional |
-| `IRON_SESSION_SECRET` | 32+ char secret for iron-session cookie encryption | Recommended |
-| `GEMINI_API_KEY` | Google Gemini API key for MedSutra AI | Optional |
+| `IRON_SESSION_SECRET` | 32+ character secret for encrypted session cookies | **Required in Production** |
+| `SUPABASE_URL` | Supabase PostgreSQL project URL | **Required in Production** |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only Supabase service-role key | **Required in Production** |
+| `DATABASE_URL` | Optional direct PostgreSQL connection string | Optional (fallback to Supabase client) |
+| `CRON_SECRET` | Secret token for authorized Cloud Scheduler watchdog invocations | **Required for Cron** |
+| `GEMINI_API_KEY` | Google Gemini API key for MedSutra AI prescription extraction | Optional (demo mode available) |
+| `RESEND_API_KEY` | Resend API key for proactive email reminders | Optional (logs notification if unset) |
+| `RESEND_FROM_EMAIL` | Sender email address for reminders | Optional |
+| `NEXT_PUBLIC_APP_URL` | Public application URL | Optional |
+| `NODE_ENV` | Environment mode (`development`, `test`, `production`) | Recommended |
 
 ---
 
-## 🏗️ Architecture Overview
+## 👥 Authentication & Role-Based Access Control (RBAC)
 
-```mermaid
-flowchart LR
-  Elder["👴 Elder (Eleanor)"] --> GO["🍃 Guardian Oasis"]
-  Family["👨‍👩‍👧 Family Manager"] --> GO
-  Caregiver["🩺 Caregiver (Priya, RN)"] --> GO
+CareOrbit features a dedicated, public login portal at `/login` with automated role-based redirection:
 
-  GO --> CareLoop["🔄 CareLoop\n/caregiver"]
-  GO --> MedSutra["💊 MedSutra AI\n/medications"]
-  GO --> Wellbeing["💚 Caregiver Wellbeing\n/wellbeing"]
-  GO --> ElderUX["🖥️ Elder-First UX\n/elder"]
-
-  CareLoop --> Email["📧 Email Notifications\n(Resend)"]
-  MedSutra --> Email
-  Wellbeing --> BackupTask["📋 Backup Task\n/api/tasks"]
-```
+1. **Older Adult (Eleanor Thompson, 76)**:
+   - **Login**: Authenticate with senior 4-digit PIN (`1234` in demo).
+   - **Destination**: `/elder` — Senior Calm View with Web Speech TTS, 56px touch targets, high contrast, and plain-language status labels.
+2. **Family Manager (Sarah Thompson)**:
+   - **Login**: Authenticate with Family Circle code (`OASIS-7629`).
+   - **Destination**: `/dashboard` — Patient overview, medication versioning, appointment scheduling, and care brief.
+3. **Primary Caregiver (Priya Sharma, RN)**:
+   - **Login**: Authenticate with Caregiver code (`CAREGIVER-4192`).
+   - **Destination**: `/caregiver` — CareLoop task inbox, handoffs, and shift resolutions.
+4. **Read-Only Observer**:
+   - **Login**: Authenticate with Observer code (`OBSERVER-8301`).
+   - **Destination**: `/timeline` — Read-only chronological audit log.
 
 ---
 
-## 📦 Module Descriptions
+## 🏗️ Architecture & Database Persistence
 
-### 🔄 CareLoop — Closed-Loop Escalation Engine
-The signature feature. When a dose check-in is not acknowledged within a configurable grace period, CareLoop automatically escalates to the assigned caregiver as an owned task. Caregivers claim, resolve, and log outcomes — creating a permanent audit trail with zero dropped tasks.
+CareOrbit implements a decoupled **Repository Pattern** (`src/lib/db/repository.ts`) with PostgreSQL schema migrations (`supabase/migrations/`):
 
-### 💊 MedSutra AI — Medication Safety Layer
-AI-powered prescription review. Every medication change creates a versioned history (v1, v2, …) with author, timestamp, and clinical rationale. The Gemini API provides plain-language explanations and interaction checks. Human verification is required before any AI suggestion takes effect.
-
-### 💚 Caregiver Wellbeing — Burnout Prevention
-Daily mood/energy/sleep/stress check-ins for caregivers. Tracks 7-day trends, computes a burnout risk score (Low / Monitor / High), and surfaces a one-tap "Request Backup Caregiver" action when risk is high. Check-ins are private unless explicitly shared.
-
-### 🖥️ Elder-First UX — Senior Calm View
-Large 56px touch targets, Web Speech TTS narration, high-contrast toggle, font scaling, and plain-language status labels designed for adults 65+. Zero cognitive clutter.
+- **Production Mode (`NODE_ENV=production`)**: Demands active database credentials (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` or `DATABASE_URL`), failing closed to prevent data loss.
+- **Demo / Test Mode**: Provides automatic in-memory fallback for local development and rapid evaluation without external credentials.
+- **Security Boundary**: The Supabase service-role key is restricted to server-side repository operations (`src/lib/supabase/server.ts`) and is never leaked to client bundles.
 
 ---
 
 ## 🔌 API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/care/today` | Today's medications and check-in status |
-| `POST` | `/api/doses` | Mark a dose as taken / skipped / snoozed |
-| `GET` | `/api/tasks` | List CareLoop tasks |
-| `POST` | `/api/tasks` | Create a CareLoop task |
-| `PATCH` | `/api/tasks/:id` | Update / resolve a task |
-| `GET` | `/api/medications` | List medications |
-| `POST` | `/api/medications` | Add a medication |
-| `PATCH` | `/api/medications/:id` | Edit medication (creates versioned entry) |
-| `GET` | `/api/appointments` | List appointments |
-| `POST` | `/api/appointments` | Add appointment |
-| `GET` | `/api/wellbeing/history` | Caregiver check-in history + burnout risk |
-| `POST` | `/api/wellbeing/checkin` | Submit wellbeing check-in |
-| `POST` | `/api/notifications/test-email` | Send a test notification email |
-| `POST` | `/api/notifications/appointment-reminder` | Send appointment reminder |
-| `POST` | `/api/auth/elder-pin` | Authenticate as elder (4-digit PIN) |
-| `POST` | `/api/auth/circle-code` | Authenticate as family/caregiver |
-| `POST` | `/api/auth/logout` | Destroy session |
-| `GET` | `/api/auth/me` | Current session info |
+All sensitive care routes strictly verify server-side iron-session cookies and enforce patient-level isolation:
 
----
-
-## 👥 Three Dedicated Roles
-
-1. **Older Adult (Eleanor Thompson, 76)**: Senior Calm View with TTS, large buttons, plain-language states.
-2. **Family Manager (Sarah Thompson)**: Full dashboard, medication change guard, grounded daily care brief.
-3. **Caregiver (Priya Sharma, RN)**: CareLoop task inbox, accountable handoffs, wellbeing check-ins.
+| Method | Path | Description | Access |
+|---|---|---|---|
+| `GET` | `/api/care/today` | Today's medications, occurrences, appointments, and brief | All circle members |
+| `POST` | `/api/care/cron-watchdog` | Automated 30-min grace-period escalation and reminders | Bearer `CRON_SECRET` |
+| `POST` | `/api/doses/checkin` | Record dose status (MARKED_TAKEN, SNOOZE, NOT_SURE, SKIPPED) | Owner, Family, Caregiver |
+| `GET` | `/api/medications` | List active medications and version history | All circle members |
+| `POST` | `/api/medications` | Create new medication order (prevents duplicate names) | Owner, Family Manager |
+| `PATCH` | `/api/medications` | Edit medication with clinical version increment (v1 $\to$ v2) | Owner, Family Manager |
+| `GET` | `/api/appointments` | List scheduled doctor appointments | All circle members |
+| `POST` | `/api/appointments` | Schedule a new doctor consultation | Owner, Family Manager |
+| `POST` | `/api/tasks` | CareLoop operations: claim, handoff, resolve, backup_request | Caregiver, Family Manager |
+| `POST` | `/api/medsutra/extract` | Gemini Flash Vision prescription extraction with magic-byte checks | Owner, Family, Caregiver |
+| `GET` | `/api/wellbeing/history` | Caregiver wellbeing history (filters unconsented records) | Caregiver (self), Family |
+| `POST` | `/api/wellbeing/checkin` | Submit daily caregiver sleep, mood, stress, and energy check-in | Caregiver |
+| `POST` | `/api/auth/elder-pin` | Authenticate senior via 4-digit PIN | Public |
+| `POST` | `/api/auth/circle-code` | Authenticate circle member via server-derived invite code | Public |
+| `POST` | `/api/auth/logout` | Destroy authenticated session cookie | Authenticated |
+| `GET` | `/api/auth/me` | Retrieve current authenticated user role and identity | Authenticated |
+| `GET` | `/api/health` | Service diagnostics and readiness probe | Public / Container Probe |
 
 ---
 
@@ -137,7 +129,7 @@ Large 56px touch targets, Web Speech TTS narration, high-contrast toggle, font s
 sequenceDiagram
     autonumber
     actor Elder as Eleanor (Older Adult)
-    participant Engine as Guardian Oasis Engine
+    participant Engine as CareLoop Watchdog Engine
     actor Caregiver as Priya Sharma, RN
     actor Family as Sarah (Family Manager)
 
@@ -145,62 +137,36 @@ sequenceDiagram
     alt Dose Acknowledged
         Elder->>Engine: Marks "Marked Taken" (8:06 AM)
         Engine->>Family: Updates Live Timeline & Daily Care Brief
-    else Grace Period Expires
+    else Grace Period Expires (30 min)
         Engine->>Engine: Transition state → UNCONFIRMED
         Engine->>Caregiver: CareLoop Escalation: Creates CareTask #C-101
         Caregiver->>Engine: Claims Task
         Caregiver->>Elder: Phone / in-person visit
-        Caregiver->>Engine: Records Resolution
-        Engine->>Family: Closed-loop resolution logged
+        Caregiver->>Engine: Records Resolution Outcome
+        Engine->>Family: Closed-loop resolution logged in shared audit trail
     end
 ```
 
 ---
 
-## 📋 Requirements Traceability Matrix
+## 🧪 Automated Test Suite (94 Tests Passing)
 
-| Requirement | Implementation | Status |
-|---|---|---|
-| Medication reminder system | `/api/doses`, `/elder`, CareLoop escalation | ✅ Done |
-| Closed-loop task handoff | `/api/tasks`, `/caregiver` CareLoop inbox | ✅ Done |
-| Medication versioning | `/api/medications` (versioned history) | ✅ Done |
-| Email notifications | `/api/notifications/test-email` (Resend) | ✅ Done |
-| Appointment management | `/api/appointments`, `/appointments` | ✅ Done |
-| Elder-First UX (large text, TTS) | `/elder`, Web Speech API, font scaling | ✅ Done |
-| Role-based access | iron-session, 4-digit PIN, circle codes | ✅ Done |
-| AI medication review | MedSutra AI (`/medsutra`) via Gemini API | ✅ Done |
-| Caregiver wellbeing tracking | `/wellbeing`, `/api/wellbeing/*` | ✅ Done |
-| Burnout risk detection | `wellbeingStore.getBurnoutRisk()` | ✅ Done |
-| Backup caregiver request | `/api/tasks` BACKUP_REQUEST type | ✅ Done |
-| Audit trail / timeline | `/timeline`, append-only event log | ✅ Done |
-| Docker containerization | `Dockerfile`, `.dockerignore`, standalone output | ✅ Done |
+Execute the full suite of unit, security, timing, and end-to-end integration tests:
+```bash
+npm test
+```
 
----
-
-## ✅ Hackathon Evaluation Criteria
-
-- [x] **Problem-solution fit** — Addresses real fragmentation in elderly care coordination
-- [x] **Technical execution** — Next.js 14 App Router, TypeScript, Zod validation, in-memory store
-- [x] **AI integration** — MedSutra AI via Gemini API; grounded care brief (0 hallucination)
-- [x] **Accessibility** — WCAG AAA elder-first design; TTS, high contrast, font scaling
-- [x] **End-to-end workflow** — CareLoop escalation → claim → resolve → audit trail
-- [x] **Testing** — 13/13 Vitest unit tests passing
-- [x] **Documentation** — This README + ARCHITECTURE.md + SECURITY.md
-- [x] **Deployability** — Docker multi-stage build, standalone output, env config
-
----
-
-## 🧪 2-Minute Demo Script (For Judges)
-
-1. **Home Portal (`/`)**: Select Older Adult Mode.
-2. **Elder Screen (`/elder`)**: Click "Read Aloud" for TTS. Mark a dose "Taken".
-3. **CareLoop (`/dashboard`)**: Trigger missed dose → see escalation task created.
-4. **Caregiver Inbox (`/caregiver`)**: Claim task, log resolution note, close loop.
-5. **Timeline (`/timeline`)**: View append-only audit trail.
-6. **Wellbeing (`/wellbeing`)**: Submit a check-in; see burnout risk badge update.
-7. **Email Bell**: Open notification drawer and dispatch a live email.
+Coverage highlights:
+* **`tests/api-security.test.ts` (28 tests)**: Route auth, client header forgery prevention, PHI masking, magic byte validation.
+* **`tests/careloop-timing.test.ts` (8 tests)**: Controlled-clock watchdog evaluation, grace-period escalation, idempotency, repository persistence.
+* **`tests/innovations.test.ts` (8 tests)**: MedSutra file validation, duplicate medication rejection, wellbeing privacy filtering.
+* **`tests/e2e-workflows.test.ts` (16 tests)**: End-to-end user journeys from login to dose check-in, task handoff, and notification suppression.
+* **`tests/guardian.test.ts` (22 tests)**: Core domain logic and store helpers.
+* **`tests/security.test.ts` (7 tests)**: Passcode redaction and RBAC invariants.
+* **`tests/smoke.test.ts` (4 tests)**: System smoke and basic flow tests.
+* **`tests/careloop-workflow.test.ts` (1 test)**: Full lifecycle integration test.
 
 ---
 
 ## 📄 License
-MIT License. Built with passion for PromptWars × Catalyst Hackathon.
+MIT License. Built for the PromptWars × Catalyst Hackathon.

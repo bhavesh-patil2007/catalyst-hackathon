@@ -96,6 +96,25 @@ export async function POST(request: Request) {
       const parsed = backupSchema.safeParse(body);
       const reason = (parsed.success && parsed.data.reason) || "Caregiver wellbeing trend indicates elevated fatigue & workload";
       const caregiverName = actor.memberName;
+
+      // Check existing open/claimed backup requests to prevent duplicates
+      const existingTasks = await careRepository.getTasks(actor.profileId);
+      const openBackup = existingTasks.find(
+        (t) =>
+          (t.sourceOccurrenceId === "backup-caregiver" || t.medicationName === "Caregiver Relief Coverage") &&
+          (t.status === "OPEN" || t.status === "CLAIMED")
+      );
+      if (openBackup) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "An active relief coverage request is already pending review in CareLoop.",
+            existingTaskId: openBackup.id,
+          },
+          { status: 409 }
+        );
+      }
+
       const task = await careRepository.createBackupRequest({
         caregiverName,
         reason,

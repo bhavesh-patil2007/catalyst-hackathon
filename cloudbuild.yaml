@@ -35,7 +35,7 @@ steps:
       - '--set-env-vars'
       - 'NODE_ENV=production,PORT=8080'
       - '--set-secrets'
-      - 'IRON_SESSION_SECRET=iron-session-secret:latest,CRON_SECRET=cron-secret:latest,GEMINI_API_KEY=gemini-api-key:latest,RESEND_API_KEY=resend-api-key:latest,DATABASE_URL=database-url:latest'
+      - 'IRON_SESSION_SECRET=iron-session-secret:latest,CRON_SECRET=cron-secret:latest,GEMINI_API_KEY=gemini-api-key:latest,RESEND_API_KEY=resend-api-key:latest,DATABASE_URL=database-url:latest,SUPABASE_URL=supabase-url:latest,SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/careorbit:$COMMIT_SHA'

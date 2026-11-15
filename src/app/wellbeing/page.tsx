@@ -75,9 +75,21 @@ export default function WellbeingPage() {
     setTimeout(() => setToast(null), 4000);
   };
 
+  const [currentCaregiverName, setCurrentCaregiverName] = useState<string>("Caregiver");
+
   const loadHistory = useCallback(async () => {
     try {
-      const res = await fetch(`/api/wellbeing/history?caregiverId=${CAREGIVER_ID}`);
+      // Fetch session identity
+      const meRes = await fetch("/api/auth/me");
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        if (meData?.member?.name) {
+          setCurrentCaregiverName(meData.member.name);
+        }
+      }
+
+      // Fetch history for verified session
+      const res = await fetch("/api/wellbeing/history");
       if (res.ok) {
         const data = await res.json();
         setHistory(data.history ?? []);
@@ -100,7 +112,7 @@ export default function WellbeingPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          caregiverId: CAREGIVER_ID,
+          caregiverId: "self",
           sleepHours,
           mood,
           stress,
@@ -222,7 +234,7 @@ export default function WellbeingPage() {
           <div className="lg:col-span-2 bg-white rounded-3xl border border-gray-200 p-6 sm:p-8 shadow-xs">
             <h2 className="text-lg font-serif font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100 flex items-center justify-between">
               <span>Today&apos;s Wellbeing Check-In</span>
-              <span className="text-xs text-gray-400 font-sans font-normal">Caregiver: Priya Sharma, RN</span>
+              <span className="text-xs text-gray-400 font-sans font-normal">Caregiver: {currentCaregiverName}</span>
             </h2>
 
             <form onSubmit={handleSubmit} className="space-y-6">

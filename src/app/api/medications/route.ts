@@ -42,6 +42,23 @@ export async function POST(request: Request) {
       );
     }
 
+    // Prevent duplicate medication creation from repeated submissions
+    const existingMeds = await careRepository.getMedications(actor.profileId);
+    const normalizedName = validated.name.trim().toLowerCase();
+    const duplicate = existingMeds.find(
+      (m) => m.name.trim().toLowerCase() === normalizedName && m.active !== false
+    );
+    if (duplicate) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `A medication named "${duplicate.name}" is already active in the care plan. Please titrate or update its version instead of creating a duplicate.`,
+          existingMedicationId: duplicate.id,
+        },
+        { status: 409 }
+      );
+    }
+
     // Persist through database repository (PostgreSQL/Supabase)
     const newMed = await careRepository.addMedicationWithVersion({
       name: validated.name,
