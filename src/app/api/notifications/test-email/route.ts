@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
-import { Resend } from "resend";
+import { dispatchProactiveEmail } from "@/lib/notificationService";
 
 const emailTestSchema = z.object({
   recipientEmail: z.string().email(),
@@ -22,10 +22,10 @@ export async function POST(request: Request) {
     let bodyPreview = "A care routine requires attention.";
 
     if (validated.type === "DOSE_DUE") {
-      subject = "Guardian Oasis: Scheduled Medication Routine Reminder";
+      subject = `Guardian Oasis: Scheduled Medication Routine Reminder (${timeString})`;
       bodyPreview = `Good day. A scheduled medication routine for ${profile.displayName} is due at ${timeString}. Please sign in to view and record check-in.`;
     } else if (validated.type === "MISSED_DOSE_ESCALATION") {
-      subject = `CareLoop Escalation: Action Required for ${profile.displayName}`;
+      subject = `CareLoop Escalation: Unconfirmed Routine for ${profile.displayName}`;
       bodyPreview = `A routine remained unconfirmed after the grace window. CareLoop created follow-up task #C-${Math.floor(100 + Math.random() * 900)}. Assigned to care circle.`;
     } else if (validated.type === "APPOINTMENT_REMINDER") {
       subject = `Guardian Oasis: Doctor Visit Reminder for ${profile.displayName}`;
@@ -36,52 +36,52 @@ export async function POST(request: Request) {
       subject = validated.customSubject;
     }
 
-    const dedupeKey = `test-${validated.type}-${validated.recipientEmail}-${Date.now()}`;
+    const dedupeKey = `email-dispatch-${validated.type}-${validated.recipientEmail}-${new Date().toISOString().slice(0, 10)}`;
 
-    const sent = guardianStore.sendNotification({
-      id: "notif-" + Date.now(),
+    const htmlContent = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #e0e0e0;border-radius:12px;">
+        <h2 style="color:#2d4a3e;margin-top:0;">Guardian Oasis Care Reminder</h2>
+        <p style="font-size:16px;color:#333;"><strong>${subject}</strong></p>
+        <p style="color:#555;line-height:1.6;">${bodyPreview}</p>
+        <div style="margin:20px 0;padding:12px;background:#f0faf5;border-radius:8px;font-size:13px;color:#244436;">
+          Recipient: <strong>${validated.recipientEmail}</strong> (${validated.recipientRole})<br/>
+          Patient Profile: <strong>${profile.displayName}</strong>
+        </div>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0;" />
+        <p style="font-size:11px;color:#888;">Care coordination powered by CareLoop &bull; ${new Date().toISOString()}</p>
+      </div>
+    `;
+
+    const result = await dispatchProactiveEmail({
       dedupeKey,
       recipientEmail: validated.recipientEmail,
       recipientRole: validated.recipientRole,
       type: validated.type,
       subject,
+      htmlContent,
       bodyPreview,
-      status: "DELIVERED",
-      timestamp: timeString,
     });
-
-    // Real email via Resend (if API key is configured)
-    let emailSent = false;
-    if (process.env.RESEND_API_KEY) {
-      try {
-        const resend = new Resend(process.env.RESEND_API_KEY);
-        await resend.emails.send({
-          from: process.env.RESEND_FROM_EMAIL ?? "careorbit@yourdomain.com",
-          to: [validated.recipientEmail],
-          subject,
-          html: `<h2 style="color:#2d4a3e;">Guardian Oasis Care Reminder</h2><p>${subject}</p><p>${bodyPreview}</p><hr/><p style="font-size:12px;color:#888;">Sent by Guardian Oasis &mdash; ${new Date().toISOString()}</p>`,
-        });
-        emailSent = true;
-      } catch (emailError) {
-        // Log but don't fail — store notification is already recorded
-        console.error("[Resend] Email dispatch failed:", emailError);
-      }
-    }
 
     return NextResponse.json({
       success: true,
-      message: sent
-        ? emailSent
-          ? "Proactive email sent successfully via Resend"
-          : "Notification logged (Resend not configured or failed)"
-        : "Duplicate email suppressed",
+      delivered: result.dispatched,
+      deduplicated: result.deduplicated,
+      status: result.status,
+      providerError: result.providerError,
+      message: result.deduplicated
+        ? "Duplicate email was suppressed by deduplication key."
+        : result.dispatched
+        ? "Live proactive email delivered via Resend."
+        : result.status === "CONFIG_REQUIRED"
+        ? "Notification recorded as CONFIG_REQUIRED (RESEND_API_KEY is not configured)."
+        : `Email delivery failed: ${result.providerError}`,
       notification: {
         recipientEmail: validated.recipientEmail,
         subject,
         bodyPreview,
         dedupeKey,
         sentAt: timeString,
-        realEmailSent: emailSent,
+        jobId: result.jobId,
       },
     });
   } catch (error) {

@@ -12,16 +12,20 @@ import {
   AlertCircle,
   Clock,
   Sparkles,
+  Edit3,
+  X,
+  FileText,
 } from "lucide-react";
-import { Medication, MedicationVersion, UserRole } from "@/types";
+import { Medication, MedicationVersion } from "@/types";
 
 export default function MedicationsPage() {
   const [medications, setMedications] = useState<Medication[]>([]);
-  const [versions, setVersions] = useState<MedicationVersion[]>([]);
+  const [allVersions, setAllVersions] = useState<MedicationVersion[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [selectedMedVersions, setSelectedMedVersions] = useState<MedicationVersion[] | null>(null);
+  const [editingMed, setEditingMed] = useState<Medication | null>(null);
+  const [viewingHistoryMed, setViewingHistoryMed] = useState<Medication | null>(null);
 
-  // Form state
+  // Add form state
   const [name, setName] = useState("");
   const [dosage, setDosage] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -30,6 +34,14 @@ export default function MedicationsPage() {
   const [pillColor, setPillColor] = useState("emerald");
   const [reason, setReason] = useState("");
   const [authorName, setAuthorName] = useState("Sarah Thompson (Family Manager)");
+
+  // Edit form state
+  const [editDosage, setEditDosage] = useState("");
+  const [editInstructions, setEditInstructions] = useState("");
+  const [editScheduleTime, setEditScheduleTime] = useState("");
+  const [editSlot, setEditSlot] = useState<"morning" | "afternoon" | "evening" | "bedtime">("morning");
+  const [editReason, setEditReason] = useState("");
+
   const [banner, setBanner] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -39,6 +51,7 @@ export default function MedicationsPage() {
       const json = await res.json();
       if (json.success) {
         setMedications(json.data.medications);
+        setAllVersions(json.data.versions || []);
       }
     } catch (err) {
       console.error(err);
@@ -71,7 +84,6 @@ export default function MedicationsPage() {
           pillShape: "capsule",
           reason,
           authorName,
-          actorRole: "family_manager",
         }),
       });
       const data = await res.json();
@@ -86,6 +98,53 @@ export default function MedicationsPage() {
         await fetchData();
       } else {
         alert(data.error || "Failed to add medication");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startEdit = (med: Medication) => {
+    setEditingMed(med);
+    setEditDosage(med.dosage);
+    setEditInstructions(med.instructions);
+    setEditScheduleTime(med.scheduleTime);
+    setEditSlot(med.slot);
+    setEditReason("");
+  };
+
+  const handleEditMedication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMed || !editReason) {
+      alert("Please provide the clinical reason for updating the medication schedule.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/medications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medicationId: editingMed.id,
+          dosage: editDosage,
+          instructions: editInstructions,
+          scheduleTime: editScheduleTime,
+          slot: editSlot,
+          reason: editReason,
+          authorName: "Sarah Thompson (Family Manager)",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setBanner(`${editingMed.name} updated to Version ${data.data.currentVersion}.0. Version guard logged.`);
+        setEditingMed(null);
+        setTimeout(() => setBanner(null), 4000);
+        await fetchData();
+      } else {
+        alert(data.error || "Failed to update medication");
       }
     } catch (err) {
       console.error(err);
@@ -263,45 +322,208 @@ export default function MedicationsPage() {
           </form>
         )}
 
+        {/* Edit Medication Modal */}
+        {editingMed && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-xl border border-gray-200 animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <div className="flex items-center space-x-2">
+                  <Edit3 className="w-5 h-5 text-emerald-700" />
+                  <h3 className="font-bold text-base text-gray-900">
+                    Edit {editingMed.name} Schedule
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setEditingMed(null)}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-700"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditMedication} className="space-y-3.5 mt-4">
+                <div className="bg-emerald-50 p-2.5 rounded-xl text-xs text-emerald-900">
+                  Updating this medication will create immutable <strong>Version {editingMed.currentVersion + 1}.0</strong>.
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      New Dosage / Strength *
+                    </label>
+                    <input
+                      required
+                      type="text"
+                      value={editDosage}
+                      onChange={(e) => setEditDosage(e.target.value)}
+                      className="w-full text-xs border border-gray-300 rounded-lg p-2.5 bg-white text-gray-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      Scheduled Time *
+                    </label>
+                    <input
+                      required
+                      type="text"
+                      value={editScheduleTime}
+                      onChange={(e) => setEditScheduleTime(e.target.value)}
+                      className="w-full text-xs border border-gray-300 rounded-lg p-2.5 bg-white text-gray-900"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Updated Instructions
+                  </label>
+                  <input
+                    type="text"
+                    value={editInstructions}
+                    onChange={(e) => setEditInstructions(e.target.value)}
+                    className="w-full text-xs border border-gray-300 rounded-lg p-2.5 bg-white text-gray-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-rose-800 mb-1">
+                    Clinical Change Reason (Required by Guard) *
+                  </label>
+                  <textarea
+                    required
+                    rows={2}
+                    value={editReason}
+                    onChange={(e) => setEditReason(e.target.value)}
+                    placeholder="e.g. Physician increased dosage from 500mg to 1000mg following HbA1c lab result"
+                    className="w-full text-xs border border-rose-300 rounded-lg p-2.5 bg-rose-50/50 text-gray-900"
+                  />
+                </div>
+
+                <div className="flex justify-end space-x-2 pt-3 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setEditingMed(null)}
+                    className="px-4 py-2 text-xs text-gray-600 hover:text-gray-900"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="px-5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl shadow-xs"
+                  >
+                    {loading ? "Incrementing Version..." : `Save Version ${editingMed.currentVersion + 1}.0`}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Version History Modal */}
+        {viewingHistoryMed && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-xl border border-gray-200 animate-in fade-in zoom-in-95 max-h-[85vh] flex flex-col">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <div className="flex items-center space-x-2">
+                  <History className="w-5 h-5 text-emerald-700" />
+                  <h3 className="font-bold text-base text-gray-900">
+                    Version History: {viewingHistoryMed.name}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setViewingHistoryMed(null)}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-700"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto space-y-3 py-4 flex-1">
+                {allVersions
+                  .filter((v) => v.medicationId === viewingHistoryMed.id)
+                  .map((v) => (
+                    <div
+                      key={v.id}
+                      className="p-3.5 rounded-xl border border-gray-200 bg-gray-50/70 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                          Version {v.version}.0
+                        </span>
+                        <span className="text-[11px] text-gray-400">{v.effectiveFrom}</span>
+                      </div>
+                      <div className="text-xs font-semibold text-gray-900">
+                        {v.labelName} &bull; {v.instructions}
+                      </div>
+                      <div className="text-[11px] text-gray-600 bg-white p-2 rounded-lg border border-gray-100">
+                        <strong>Reason:</strong> {v.reason}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        Authorized by: {v.createdBy}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Existing Medications Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {medications.map((med) => (
             <div
               key={med.id}
-              className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs hover:border-[#4a7c68] transition-all"
+              className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs hover:border-[#4a7c68] transition-all flex flex-col justify-between"
             >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center justify-center">
-                    <Pill className="w-5 h-5" />
+              <div>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center justify-center">
+                      <Pill className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-gray-900 text-base">{med.name}</h3>
+                      <p className="text-xs text-gray-500 font-medium">{med.dosage}</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-gray-900 text-base">{med.name}</h3>
-                    <p className="text-xs text-gray-500 font-medium">{med.dosage}</p>
-                  </div>
-                </div>
 
-                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-full border border-emerald-200">
-                  Version {med.currentVersion}.0 (Active)
-                </span>
-              </div>
-
-              <div className="mt-4 space-y-2 text-xs text-gray-600">
-                <div className="flex items-center space-x-1.5 text-gray-700">
-                  <Clock className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>Scheduled for <strong>{med.scheduleTime}</strong> ({med.slot})</span>
-                </div>
-                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">
-                  <span className="text-gray-400 block text-[10px] uppercase font-semibold">
-                    Instructions
+                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-full border border-emerald-200">
+                    Version {med.currentVersion}.0 (Active)
                   </span>
-                  {med.instructions}
+                </div>
+
+                <div className="mt-4 space-y-2 text-xs text-gray-600">
+                  <div className="flex items-center space-x-1.5 text-gray-700">
+                    <Clock className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Scheduled for <strong>{med.scheduleTime}</strong> ({med.slot})</span>
+                  </div>
+                  <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">
+                    <span className="text-gray-400 block text-[10px] uppercase font-semibold">
+                      Instructions
+                    </span>
+                    {med.instructions}
+                  </div>
                 </div>
               </div>
 
               <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-                <span>Refill remaining: <strong>{med.remainingQuantity} doses</strong></span>
-                <span className="text-emerald-800 font-medium">Verified by Care Team</span>
+                <button
+                  onClick={() => setViewingHistoryMed(med)}
+                  className="text-emerald-800 hover:text-emerald-900 font-medium inline-flex items-center space-x-1"
+                >
+                  <History className="w-3 h-3" />
+                  <span>Version History</span>
+                </button>
+
+                <button
+                  onClick={() => startEdit(med)}
+                  className="bg-gray-100 hover:bg-emerald-50 hover:text-emerald-800 text-gray-700 px-3 py-1.5 rounded-lg font-semibold text-xs inline-flex items-center space-x-1 transition-colors"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>Edit Schedule</span>
+                </button>
               </div>
             </div>
           ))}

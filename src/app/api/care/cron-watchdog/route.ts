@@ -1,60 +1,114 @@
 import { NextResponse } from "next/server";
 import { guardianStore } from "@/lib/store";
+import { dispatchProactiveEmail } from "@/lib/notificationService";
 
 export async function POST(request: Request) {
   try {
     const url = new URL(request.url);
     const forceCheck = url.searchParams.get("force") === "true";
+    const todayIso = new Date().toISOString().slice(0, 10);
 
-    // Autonomous evaluation of overdue/missed routines
+    const profile = guardianStore.getProfile();
+    const members = guardianStore.getMembers();
     const occurrences = guardianStore.getOccurrences();
-    const scheduled = occurrences.filter(
-      (o) => o.status === "SCHEDULED" || o.status === "PENDING"
+    const appointments = guardianStore.getAppointments();
+
+    const results = {
+      timestamp: new Date().toISOString(),
+      upcomingDoseRemindersSent: 0,
+      missedDoseEscalations: 0,
+      appointmentRemindersSent: 0,
+      tasksCreated: [] as string[],
+    };
+
+    // 1. Proactive Upcoming Medication Reminders (DOSE_DUE)
+    const upcomingDoses = occurrences.filter((o) => o.status === "SCHEDULED");
+    for (const dose of upcomingDoses) {
+      const elderMember = members.find((m) => m.role === "owner");
+      if (elderMember) {
+        const dedupeKey = `dose-due-${dose.id}-${todayIso}`;
+        const subject = `Medication Reminder: ${dose.medicationName} (${dose.scheduledTime})`;
+        const bodyPreview = `Good morning ${profile.displayName}. Your routine for ${dose.medicationName} (${dose.doseText}) is due at ${dose.scheduledTime}.`;
+
+        const dispatchRes = await dispatchProactiveEmail({
+          dedupeKey,
+          recipientEmail: elderMember.email,
+          recipientRole: "Older Adult",
+          type: "DOSE_DUE",
+          subject,
+          htmlContent: `<h2>Guardian Oasis Routine Reminder</h2><p>${bodyPreview}</p><p>Instructions: ${dose.instructions}</p>`,
+          bodyPreview,
+        });
+
+        if (dispatchRes.dispatched || dispatchRes.status === "CONFIG_REQUIRED") {
+          results.upcomingDoseRemindersSent++;
+        }
+      }
+    }
+
+    // 2. Autonomous Escalation for Missed / Overdue Doses (CareLoop Closed-Loop)
+    const unconfirmedDoses = occurrences.filter(
+      (o) => o.status === "PENDING" || (forceCheck && o.scheduledTime.includes("01:00 PM"))
     );
 
-    let escalatedCount = 0;
-    const escalatedTasks = [];
+    for (const dose of unconfirmedDoses) {
+      const task = guardianStore.escalateUnconfirmedDose(dose.id);
+      if (task) {
+        results.missedDoseEscalations++;
+        results.tasksCreated.push(task.id);
 
-    for (const occ of scheduled) {
-      // In production, check timestamp vs current time + grace period (30 mins)
-      // If force=true or unconfirmed routine, escalate
-      if (forceCheck || occ.status === "PENDING" || occ.scheduledTime.includes("01:00 PM")) {
-        const task = guardianStore.escalateUnconfirmedDose(occ.id);
-        if (task) {
-          escalatedCount++;
-          escalatedTasks.push(task);
+        const primaryCaregiver = members.find((m) => m.role === "caregiver");
+        if (primaryCaregiver) {
+          const dedupeKey = `escalation-notif-${dose.id}-${todayIso}`;
+          const subject = `CareLoop Escalation: Unconfirmed Routine for ${profile.displayName}`;
+          const bodyPreview = `Routine for ${dose.medicationName} remained unconfirmed past the grace period. Follow-up task #${task.id} has been created.`;
 
-          // Proactively send notification email to primary caregiver
-          guardianStore.sendNotification({
-            id: `watchdog-notif-${task.id}`,
-            dedupeKey: `escalation-${occ.id}-${new Date().toISOString().slice(0, 10)}`,
-            recipientEmail: "priya.caregiver@oasiscare.demo.local",
+          await dispatchProactiveEmail({
+            dedupeKey,
+            recipientEmail: primaryCaregiver.email,
             recipientRole: "Primary Caregiver",
             type: "MISSED_DOSE_ESCALATION",
-            subject: `CareLoop Urgent: Unconfirmed dose for ${occ.medicationName}`,
-            bodyPreview: `Autonomous watchdog detected unconfirmed routine for ${occ.medicationName}. Task #${task.id} created.`,
-            status: "DELIVERED",
-            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            subject,
+            htmlContent: `<h2>CareLoop Escalation Notice</h2><p><strong>${dose.medicationName}</strong> remained unconfirmed.</p><p>Please review task #${task.id} in the CareLoop Inbox.</p>`,
+            bodyPreview,
           });
+        }
+      }
+    }
+
+    // 3. Proactive Doctor Appointment Reminders
+    for (const appt of appointments) {
+      const familyManager = members.find((m) => m.role === "family_manager");
+      if (familyManager) {
+        const dedupeKey = `appt-cron-reminder-${appt.id}-${todayIso}`;
+        const subject = `Upcoming Doctor Consultation: ${appt.doctorName} (${appt.dateLabel})`;
+        const bodyPreview = `Reminder: ${profile.displayName} has an appointment with ${appt.doctorName} on ${appt.dateLabel} at ${appt.timeLabel} (${appt.clinicName}).`;
+
+        const dispatchRes = await dispatchProactiveEmail({
+          dedupeKey,
+          recipientEmail: familyManager.email,
+          recipientRole: "Family Manager",
+          type: "APPOINTMENT_REMINDER",
+          subject,
+          htmlContent: `<h2>Guardian Oasis Appointment Reminder</h2><p>${bodyPreview}</p><p>Transport: ${appt.transportAssigned ? "Arranged" : "Action Needed"}</p>`,
+          bodyPreview,
+        });
+
+        if (dispatchRes.dispatched || dispatchRes.status === "CONFIG_REQUIRED") {
+          results.appointmentRemindersSent++;
         }
       }
     }
 
     return NextResponse.json({
       success: true,
-      timestamp: new Date().toISOString(),
-      checkedCount: scheduled.length,
-      escalatedCount,
-      tasks: escalatedTasks,
-      message:
-        escalatedCount > 0
-          ? `Watchdog escalated ${escalatedCount} unconfirmed routines into CareLoop tasks.`
-          : "All active medication routines are up to date.",
+      message: "Autonomous care watchdog completed routine scan.",
+      results,
     });
   } catch (error) {
     console.error("[Watchdog]", error);
     return NextResponse.json(
-      { success: false, error: "Failed to run care watchdog" },
+      { success: false, error: "Watchdog execution failed" },
       { status: 500 }
     );
   }

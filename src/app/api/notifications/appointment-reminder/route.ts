@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
-import { Resend } from "resend";
+import { dispatchProactiveEmail } from "@/lib/notificationService";
 
 const reminderSchema = z.object({
   appointmentId: z.string().min(1, "appointmentId is required"),
@@ -23,18 +23,18 @@ export async function POST(request: Request) {
     }
 
     const members = guardianStore.getMembers();
-    // Send to family managers and caregivers
     const recipients = members.filter(
       (m) => m.role === "family_manager" || m.role === "caregiver"
     );
 
     const profile = guardianStore.getProfile();
+    const subject = `Upcoming Doctor Visit: ${appointment.doctorName} — ${appointment.dateLabel}`;
+    const bodyPreview = `Reminder: Upcoming consultation with ${appointment.doctorName} on ${appointment.dateLabel} at ${appointment.timeLabel} (${appointment.clinicName}).`;
 
-    const subject = `Appointment Reminder: ${appointment.doctorName} — ${appointment.dateLabel}`;
-    const htmlBody = `
-      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-        <h2 style="color:#2d4a3e;">Guardian Oasis &mdash; Appointment Reminder</h2>
-        <p>This is a reminder for the following upcoming appointment for <strong>${profile.displayName}</strong>:</p>
+    const htmlContent = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;border:1px solid #e0e0e0;border-radius:12px;">
+        <h2 style="color:#2d4a3e;margin-top:0;">Guardian Oasis &mdash; Appointment Reminder</h2>
+        <p>Upcoming consultation reminder for <strong>${profile.displayName}</strong>:</p>
         <table style="border-collapse:collapse;width:100%;margin:16px 0;">
           <tr>
             <td style="padding:8px;font-weight:bold;background:#f0faf5;">Doctor</td>
@@ -62,47 +62,24 @@ export async function POST(request: Request) {
             ? `<p><strong>Questions to ask:</strong></p><ul>${appointment.questionsToAsk.map((q) => `<li>${q}</li>`).join("")}</ul>`
             : ""
         }
-        <hr/>
-        <p style="font-size:12px;color:#888;">Guardian Oasis &mdash; Care coordination made simple. Sent at ${new Date().toISOString()}</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0;" />
+        <p style="font-size:12px;color:#888;">Guardian Oasis &mdash; Care coordination made simple.</p>
       </div>
     `;
 
-    const emailResults: { email: string; sent: boolean }[] = [];
-    let realEmailSent = false;
-
-    if (process.env.RESEND_API_KEY && recipients.length > 0) {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      for (const member of recipients) {
-        try {
-          await resend.emails.send({
-            from: process.env.RESEND_FROM_EMAIL ?? "careorbit@yourdomain.com",
-            to: [member.email],
-            subject,
-            html: htmlBody,
-          });
-          emailResults.push({ email: member.email, sent: true });
-          realEmailSent = true;
-        } catch (err) {
-          console.error(`[Resend] Failed to email ${member.email}:`, err);
-          emailResults.push({ email: member.email, sent: false });
-        }
-      }
-    }
-
-    // Record in notification store
-    const timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const results = [];
     for (const member of recipients) {
-      guardianStore.sendNotification({
-        id: `notif-appt-${appointment.id}-${member.id}-${Date.now()}`,
-        dedupeKey: `appt-reminder-${appointment.id}-${member.email}`,
+      const dedupeKey = `appt-reminder-${appointment.id}-${member.email}-${new Date().toISOString().slice(0, 10)}`;
+      const result = await dispatchProactiveEmail({
+        dedupeKey,
         recipientEmail: member.email,
         recipientRole: member.role,
         type: "APPOINTMENT_REMINDER",
         subject,
-        bodyPreview: `Reminder for ${appointment.doctorName} on ${appointment.dateLabel}.`,
-        status: "DELIVERED",
-        timestamp: timeString,
+        htmlContent,
+        bodyPreview,
       });
+      results.push({ email: member.email, status: result.status, dispatched: result.dispatched });
     }
 
     return NextResponse.json({
@@ -113,8 +90,7 @@ export async function POST(request: Request) {
         dateLabel: appointment.dateLabel,
       },
       recipientCount: recipients.length,
-      realEmailSent,
-      emailResults,
+      results,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

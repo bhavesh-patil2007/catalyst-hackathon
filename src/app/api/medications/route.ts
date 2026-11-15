@@ -66,3 +66,71 @@ export async function POST(request: Request) {
     );
   }
 }
+
+const updateMedicationSchema = z.object({
+  medicationId: z.string().min(1),
+  dosage: z.string().optional(),
+  instructions: z.string().optional(),
+  scheduleTime: z.string().optional(),
+  slot: z.enum(["morning", "afternoon", "evening", "bedtime"]).optional(),
+  reason: z.string().min(3),
+  authorName: z.string().optional(),
+  careProfileId: z.string().optional(),
+});
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const validated = updateMedicationSchema.parse(body);
+
+    const authResult = await getActorFromSessionOrHeader(
+      request,
+      ["owner", "family_manager"],
+      validated.careProfileId
+    );
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
+    const { actor } = authResult;
+
+    if (validated.careProfileId && !guardianStore.verifyPatientAccess(actor.profileId, validated.careProfileId)) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: Caregiver cannot access unrelated patient profile." },
+        { status: 403 }
+      );
+    }
+
+    const result = guardianStore.editMedicationWithVersion({
+      medicationId: validated.medicationId,
+      dosage: validated.dosage,
+      instructions: validated.instructions,
+      scheduleTime: validated.scheduleTime,
+      slot: validated.slot,
+      reason: validated.reason,
+      authorName: validated.authorName || actor.memberName,
+    });
+
+    if (!result) {
+      return NextResponse.json(
+        { success: false, error: "Medication not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: result.medication,
+      version: result.version,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
+    }
+    return NextResponse.json(
+      { success: false, error: "Failed to update medication schedule" },
+      { status: 500 }
+    );
+  }
+}

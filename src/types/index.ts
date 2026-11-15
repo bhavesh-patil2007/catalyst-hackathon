@@ -145,8 +145,10 @@ export interface NotificationJob {
   type: "DOSE_DUE" | "MISSED_DOSE_ESCALATION" | "APPOINTMENT_REMINDER" | "TASK_CLAIMED";
   subject: string;
   bodyPreview: string;
-  status: "DELIVERED" | "QUEUED";
+  status: "DELIVERED" | "QUEUED" | "FAILED" | "CONFIG_REQUIRED";
   timestamp: string;
+  retryCount?: number;
+  providerError?: string;
 }
 
 export interface AuditEvent {

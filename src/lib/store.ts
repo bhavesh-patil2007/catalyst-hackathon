@@ -743,6 +743,70 @@ class GuardianStore {
     return newMed;
   }
 
+  getMedicationVersions(medicationId?: string): MedicationVersion[] {
+    if (medicationId) {
+      return this.versions.filter((v) => v.medicationId === medicationId);
+    }
+    return this.versions;
+  }
+
+  editMedicationWithVersion(data: {
+    medicationId: string;
+    dosage?: string;
+    instructions?: string;
+    scheduleTime?: string;
+    slot?: "morning" | "afternoon" | "evening" | "bedtime";
+    reason: string;
+    authorName: string;
+  }): { medication: Medication; version: MedicationVersion } | null {
+    const med = this.medications.find((m) => m.id === data.medicationId);
+    if (!med) return null;
+
+    med.currentVersion += 1;
+    if (data.dosage) med.dosage = data.dosage;
+    if (data.instructions) med.instructions = data.instructions;
+    if (data.scheduleTime) med.scheduleTime = data.scheduleTime;
+    if (data.slot) med.slot = data.slot;
+
+    const newVersion: MedicationVersion = {
+      id: "ver-" + Date.now(),
+      medicationId: med.id,
+      version: med.currentVersion,
+      labelName: `${med.name} ${med.dosage}`,
+      doseText: med.dosage,
+      instructions: med.instructions,
+      effectiveFrom: new Date().toISOString().split("T")[0],
+      createdBy: data.authorName,
+      reason: data.reason,
+      confirmedBy: data.authorName,
+    };
+
+    this.versions.unshift(newVersion);
+
+    // Update active dose occurrence in today's schedule
+    const occ = this.occurrences.find((o) => o.medicationId === med.id);
+    if (occ) {
+      if (data.dosage) occ.doseText = data.dosage;
+      if (data.instructions) occ.instructions = data.instructions;
+      if (data.scheduleTime) occ.scheduledTime = data.scheduleTime;
+      occ.updatedAt = `Updated to v${med.currentVersion}`;
+    }
+
+    this.auditEvents.unshift({
+      id: "aud-" + Date.now(),
+      careProfileId: this.profile.id,
+      actorName: data.authorName,
+      actorRole: "family_manager",
+      action: "MEDICATION_UPDATED",
+      entityType: "MEDICATION",
+      entityId: med.id,
+      description: `${data.authorName} updated ${med.name} schedule to v${med.currentVersion} (${med.dosage}, ${med.scheduleTime}). Clinical reason: "${data.reason}".`,
+      timestamp: `Today at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+    });
+
+    return { medication: med, version: newVersion };
+  }
+
   addAppointment(appt: Omit<DoctorAppointment, "id" | "careProfileId">): DoctorAppointment {
     const newAppt: DoctorAppointment = {
       ...appt,

@@ -18,6 +18,7 @@ export async function GET() {
     const auditEvents = guardianStore.getAuditEvents();
     const brief = guardianStore.getDailyCareBrief();
     const refillRunways = guardianStore.getRefillRunways();
+    const versions = guardianStore.getMedicationVersions();
 
     return NextResponse.json({
       success: true,
@@ -25,6 +26,7 @@ export async function GET() {
         profile,
         members,
         medications,
+        versions,
         occurrences,
         appointments,
         tasks,
