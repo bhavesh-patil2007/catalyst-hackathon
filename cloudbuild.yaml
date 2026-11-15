@@ -1,0 +1,40 @@
+steps:
+  # 1. Build production container image with Dockerfile
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/careorbit:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/careorbit:latest'
+      - '.'
+
+  # 2. Push image to Google Container Registry / Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/careorbit:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/careorbit:latest']
+
+  # 3. Deploy to Google Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'careorbit'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/careorbit:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+
+images:
+  - 'gcr.io/$PROJECT_ID/careorbit:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/careorbit:latest'
+
+timeout: '1200s'
