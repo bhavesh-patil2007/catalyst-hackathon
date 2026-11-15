@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { careRepository } from "@/lib/db/repository";
-import { getBurnoutRisk } from "@/lib/wellbeingStore";
+import { calculateWellbeingRisk } from "@/lib/wellbeingStore";
 import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const CheckInSchema = z.object({
@@ -22,7 +22,12 @@ export async function POST(req: NextRequest) {
     }
 
     const { actor } = authResult;
-    const body = await req.json();
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+    }
     const parsed = CheckInSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -32,21 +37,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Derive caregiver identity STRICTLY from the verified session
-    const verifiedCaregiverId = actor.memberName;
+    // 2. Derive caregiver identity STRICTLY from the verified session (prefer stable memberId, fallback to memberName)
+    const verifiedCaregiverId = actor.memberId || actor.memberName;
 
-    // 3. Persist through database repository
-    const checkIn = await careRepository.addWellbeingCheckIn({
-      ...parsed.data,
-      careProfileId: actor.profileId,
-      caregiverId: verifiedCaregiverId,
-    });
+    try {
+      // 3. Persist through database repository with atomic daily constraint
+      const checkIn = await careRepository.addWellbeingCheckIn({
+        ...parsed.data,
+        careProfileId: actor.profileId,
+        caregiverId: verifiedCaregiverId,
+      });
 
-    const burnoutRisk = getBurnoutRisk(verifiedCaregiverId);
+      // Calculate risk and trends from persistent database records
+      const history = await careRepository.getWellbeingHistory(verifiedCaregiverId, actor.profileId);
+      const riskAssessment = calculateWellbeingRisk(history);
 
-    return NextResponse.json({ success: true, checkIn, burnoutRisk }, { status: 201 });
-  } catch (err) {
-    console.error("[wellbeing/checkin] Error:", err);
+      return NextResponse.json(
+        {
+          success: true,
+          checkIn,
+          burnoutRisk: riskAssessment.level,
+          assessment: riskAssessment,
+        },
+        { status: 201 }
+      );
+    } catch (err: any) {
+      if (err?.code === "DUPLICATE_DAILY_CHECKIN" || err?.code === "23505") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Daily check-in already recorded for today in this care circle.",
+          },
+          { status: 409 }
+        );
+      }
+      throw err;
+    }
+  } catch (err: any) {
+    console.error("[wellbeing/checkin] Error:", err?.message);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

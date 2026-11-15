@@ -201,6 +201,24 @@ export async function checkDistributedLoginRateLimit(
 }
 
 /**
+ * Distributed Rate Limiter for general endpoints (e.g. MedSutra AI extraction).
+ * Fails closed in production if persistent database is unavailable.
+ */
+export async function checkDistributedRateLimit(
+  key: string,
+  maxAttempts: number = 10,
+  windowMs: number = 60_000,
+  failClosedInProduction: boolean = true
+): Promise<RateLimitResult> {
+  if (process.env.NODE_ENV === "production" && failClosedInProduction) {
+    if (!isSupabaseConfigured() && !getDatabasePool()) {
+      return { allowed: false, remainingAttempts: 0, retryAfterSeconds: 60 };
+    }
+  }
+  return checkDistributedLoginRateLimit(key, maxAttempts, windowMs);
+}
+
+/**
  * Resets rate limit records on successful authentication.
  */
 export async function resetLoginRateLimit(key: string): Promise<void> {

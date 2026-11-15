@@ -111,6 +111,13 @@ export interface DoctorAppointment {
   status: "UPCOMING" | "COMPLETED" | "CANCELLED";
 }
 
+export type TaskOutcome =
+  | "spoke_with_elder"
+  | "visited_in_person"
+  | "self_resolved"
+  | "unable_to_reach"
+  | "handed_off";
+
 export interface CareTask {
   id: string;
   careProfileId: string;

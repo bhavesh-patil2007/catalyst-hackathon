@@ -70,7 +70,7 @@ export interface CareRepository {
   resolveTask(taskId: string, outcome: TaskOutcome, note: string, resolver: string): Promise<CareTask | null>;
   escalateUnconfirmedDose(occurrenceId: string): Promise<CareTask | null>;
   createBackupRequest(params: { careProfileId?: string; caregiverName: string; reason: string }): Promise<CareTask>;
-  getNotifications(): Promise<NotificationJob[]>;
+  getNotifications(profileId?: string): Promise<NotificationJob[]>;
   sendNotification(job: NotificationJob): Promise<void>;
   getAuditEvents(profileId?: string): Promise<AuditEvent[]>;
   logAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): Promise<void>;
@@ -1253,15 +1253,21 @@ export class PersistentCareRepository implements CareRepository {
     throw new Error("Persistent database connection required to create backup requests.");
   }
 
-  async getNotifications(): Promise<NotificationJob[]> {
+  async getNotifications(profileId?: string): Promise<NotificationJob[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
 
     if (supabase) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("notification_jobs")
         .select("id, dedupe_key, recipient_email, recipient_role, notification_type, subject, body_preview, status, provider_error, retry_count, sent_at")
         .order("sent_at", { ascending: false });
+
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
+      }
+
+      const { data, error } = await q;
 
       if (error) {
         throw new Error(`Failed to query notification jobs: ${error.message}`);
@@ -1549,7 +1555,7 @@ export class InMemoryCareRepository implements CareRepository {
     return guardianStore.createBackupRequest(params);
   }
 
-  async getNotifications(): Promise<NotificationJob[]> {
+  async getNotifications(profileId?: string): Promise<NotificationJob[]> {
     return guardianStore.getNotifications();
   }
 
