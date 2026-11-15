@@ -13,13 +13,14 @@ const PROTECTED_PATHS = [
 ];
 const AUTH_API = "/api/auth";
 const PUBLIC_API = ["/api/care/today", "/api/care/escalate-demo"];
+const PUBLIC_EXACT_PATHS = ["/", "/login"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
+  // Allow public landing, login and explicitly public API paths.
   if (
-    pathname === "/" ||
+    PUBLIC_EXACT_PATHS.includes(pathname) ||
     pathname.startsWith(AUTH_API) ||
     PUBLIC_API.some((p) => pathname.startsWith(p))
   ) {
@@ -33,8 +34,8 @@ export function middleware(request: NextRequest) {
   // Check session cookie exists (iron-session uses a signed cookie)
   const sessionCookie = request.cookies.get("guardian_session");
   if (!sessionCookie) {
-    const url = new URL("/", request.url);
-    url.searchParams.set("auth", "required");
+    const url = new URL("/login", request.url);
+    url.searchParams.set("redirect", pathname);
     return NextResponse.redirect(url);
   }
 
