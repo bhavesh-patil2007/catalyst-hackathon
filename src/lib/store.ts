@@ -437,6 +437,16 @@ class GuardianStore {
     return this.auditEvents;
   }
 
+  addAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): AuditEvent {
+    const fullEvent: AuditEvent = {
+      ...event,
+      id: "audit-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7),
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+    this.auditEvents.unshift(fullEvent);
+    return fullEvent;
+  }
+
   // Feature 7: Refill Runway Estimation
   getRefillRunways(): RefillRunway[] {
     return this.medications.map((med) => {

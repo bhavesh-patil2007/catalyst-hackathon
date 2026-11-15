@@ -1,5 +1,7 @@
+import { isValidFileSignature } from "@/lib/fileValidation";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const ExtractionSchema = z.object({
   name: z.string(),
@@ -53,8 +55,51 @@ const DEMO_EXTRACTIONS = [
   },
 ];
 
+// Rate limiting map for prescription analysis
+const rateLimits = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(identifier: string): boolean {
+  const now = Date.now();
+  const entry = rateLimits.get(identifier);
+  if (!entry || now > entry.resetAt) {
+    rateLimits.set(identifier, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= 10) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+
+
+
 export async function POST(request: NextRequest) {
   try {
+    // 1. Authorization: Only authenticated circle members can access prescription extraction
+    const authResult = await getActorFromSessionOrHeader(request, [
+      "owner",
+      "family_manager",
+      "caregiver",
+    ]);
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
+    const { actor } = authResult;
+
+    // 2. Rate limiting
+    const ip =
+      request.headers.get("x-forwarded-for")?.split(",")[0].trim() || actor.profileId;
+    if (!checkRateLimit(ip)) {
+      return NextResponse.json(
+        { success: false, error: "Too many extraction requests. Please wait a minute." },
+        { status: 429, headers: { "X-Verification-Required": "true" } }
+      );
+    }
+
+    // 3. Content-Type verification
     const contentType = request.headers.get("content-type") || "";
     if (!contentType.includes("multipart/form-data")) {
       return NextResponse.json(
@@ -73,7 +118,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate file size (max 10MB)
+    // 4. File size validation (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
       return NextResponse.json(
         { success: false, error: "File exceeds 10MB limit" },
@@ -81,12 +126,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate file type
-    const isImage = file.type.startsWith("image/");
-    const isPdf = file.type === "application/pdf";
-    if (!isImage && !isPdf) {
+    // 5. Binary magic-byte signature validation (prevents MIME type spoofing)
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const signatureCheck = isValidFileSignature(buffer);
+
+    if (!signatureCheck.valid) {
       return NextResponse.json(
-        { success: false, error: "Only image files (JPEG, PNG, WebP) or PDFs are accepted" },
+        {
+          success: false,
+          error: "Invalid file signature. Only authentic JPEG, PNG, WebP or PDF files are accepted.",
+        },
         { status: 400, headers: { "X-Verification-Required": "true" } }
       );
     }
@@ -94,7 +144,7 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      // Demo mode — returns verified structured sample extractions
+      // Demo mode fallback — returns verified clinical sample extractions
       return NextResponse.json(
         {
           success: true,
@@ -111,8 +161,8 @@ export async function POST(request: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const arrayBuffer = await file.arrayBuffer();
-    const base64Data = Buffer.from(arrayBuffer).toString("base64");
+    const base64Data = buffer.toString("base64");
+    const detectedMime = signatureCheck.format || file.type || "image/jpeg";
 
     const prompt = `You are MedSutra AI, a clinical prescription extraction assistant.
 Extract all medications from this medical prescription document or image.
@@ -138,7 +188,7 @@ Return ONLY a raw valid JSON array matching this schema without markdown fences 
     const imagePart = {
       inlineData: {
         data: base64Data,
-        mimeType: file.type || "image/jpeg",
+        mimeType: detectedMime,
       },
     };
 
@@ -155,17 +205,25 @@ Return ONLY a raw valid JSON array matching this schema without markdown fences 
     try {
       parsed = JSON.parse(cleaned);
     } catch {
+      // Strictly sanitize: NEVER return raw response text or internal details
       return NextResponse.json(
-        { success: false, error: "Failed to parse Gemini response as JSON", raw: responseText },
-        { status: 500, headers: { "X-Verification-Required": "true" } }
+        {
+          success: false,
+          error: "Unable to parse prescription structure. Please provide a clearer image.",
+        },
+        { status: 422, headers: { "X-Verification-Required": "true" } }
       );
     }
 
     const validated = ExtractionArraySchema.safeParse(parsed);
     if (!validated.success) {
+      // Strictly sanitize: NEVER leak schema details or internal exception paths
       return NextResponse.json(
-        { success: false, error: "Gemini response schema mismatch", details: validated.error.issues },
-        { status: 500, headers: { "X-Verification-Required": "true" } }
+        {
+          success: false,
+          error: "Prescription extraction did not meet clinical structure standards.",
+        },
+        { status: 422, headers: { "X-Verification-Required": "true" } }
       );
     }
 
@@ -174,9 +232,13 @@ Return ONLY a raw valid JSON array matching this schema without markdown fences 
       { headers: { "X-Verification-Required": "true" } }
     );
   } catch (error: any) {
-    console.error("[MedSutra extract]", error);
+    // Log privately on server; NEVER return stack traces or raw error messages to client
+    console.error("[MedSutra extract] Server error:", error?.message);
     return NextResponse.json(
-      { success: false, error: error?.message || "Internal server error" },
+      {
+        success: false,
+        error: "Prescription processing encountered an error. Please try again.",
+      },
       { status: 500, headers: { "X-Verification-Required": "true" } }
     );
   }

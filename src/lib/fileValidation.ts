@@ -1,0 +1,53 @@
+/**
+ * Validates actual binary magic bytes of the uploaded file to prevent MIME type spoofing.
+ */
+export function isValidFileSignature(buffer: Buffer): { valid: boolean; format?: string } {
+  if (buffer.length < 4) return { valid: false };
+
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { valid: true, format: "image/jpeg" };
+  }
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return { valid: true, format: "image/png" };
+  }
+
+  // PDF: %PDF (25 50 44 46)
+  if (
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46
+  ) {
+    return { valid: true, format: "application/pdf" };
+  }
+
+  // WebP: RIFF .... WEBP
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return { valid: true, format: "image/webp" };
+  }
+
+  return { valid: false };
+}

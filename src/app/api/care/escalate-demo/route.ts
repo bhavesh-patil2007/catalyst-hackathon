@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { guardianStore } from "@/lib/store";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
 const escalateSchema = z.object({
   occurrenceId: z.string().optional(),
@@ -8,6 +9,16 @@ const escalateSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    const authResult = await getActorFromSessionOrHeader(request, [
+      "owner",
+      "family_manager",
+      "caregiver",
+    ]);
+
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
     const body = await request.json().catch(() => ({}));
     const validated = escalateSchema.parse(body);
 

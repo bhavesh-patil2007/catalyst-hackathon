@@ -1,14 +1,25 @@
 import { NextResponse } from "next/server";
 import { guardianStore } from "@/lib/store";
-import { getSession } from "@/lib/session";
+import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const session = await getSession();
-    const role = session?.authenticated ? session.role : undefined;
+    // Enforce authentication: only authenticated circle members can access patient data
+    const authResult = await getActorFromSessionOrHeader(request, [
+      "owner",
+      "family_manager",
+      "caregiver",
+      "read_only",
+    ]);
 
-    // Sanitize profile to prevent sensitive credentials (PINs) from being exposed in HTTP responses
-    const profile = guardianStore.getSanitizedProfile(role);
+    if (!authResult.success) {
+      return authResult.response;
+    }
+
+    const { actor } = authResult;
+
+    // Sanitize profile: strictly redact passcodes and circle invite codes from HTTP response
+    const profile = guardianStore.getSanitizedProfile(actor.role);
     const members = guardianStore.getMembers();
     const medications = guardianStore.getMedications();
     const occurrences = guardianStore.getOccurrences();

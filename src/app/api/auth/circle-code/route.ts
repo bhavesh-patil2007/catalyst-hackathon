@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { INITIAL_PROFILE } from "@/lib/store";
 import { getSession } from "@/lib/session";
+import { isDemoCredential, verifySecret, DEMO_CREDENTIALS } from "@/lib/authCrypto";
 
-// Simple in-memory rate limiter
+// In-memory IP rate limiter: 5 attempts per minute
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(ip: string): boolean {
@@ -49,7 +50,25 @@ export async function POST(request: Request) {
       );
     }
 
-    if (code.trim().toUpperCase() !== INITIAL_PROFILE.circleInviteCode.toUpperCase()) {
+    // Reject hardcoded demo credentials in production environments
+    if (process.env.NODE_ENV === "production" && isDemoCredential(code)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Demo invite codes are strictly prohibited in production.",
+        },
+        { status: 401 }
+      );
+    }
+
+    // Verify invite code using salted scrypt hashing
+    const isValid = verifySecret(
+      code.trim().toUpperCase(),
+      DEMO_CREDENTIALS.circleCode.hash,
+      DEMO_CREDENTIALS.circleCode.salt
+    );
+
+    if (!isValid) {
       return NextResponse.json(
         { success: false, error: "Invalid circle code" },
         { status: 401 }
@@ -60,14 +79,14 @@ export async function POST(request: Request) {
     session.authenticated = true;
     session.role = "family_manager";
     session.profileId = INITIAL_PROFILE.id;
-    session.memberName = name ?? "Care Circle Member";
+    session.memberName = name?.trim() || "Care Circle Member";
     await session.save();
 
     return NextResponse.json({
       success: true,
       role: "family_manager",
-      memberName: name ?? "Care Circle Member",
-      email: email ?? undefined,
+      memberName: session.memberName,
+      email: email?.trim() || undefined,
     });
   } catch {
     return NextResponse.json(

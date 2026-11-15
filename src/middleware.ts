@@ -11,28 +11,34 @@ const PROTECTED_PATHS = [
   "/wellbeing",
   "/medsutra",
 ];
-const AUTH_API = "/api/auth";
-const PUBLIC_API = ["/api/care/today", "/api/care/escalate-demo"];
+
+const PUBLIC_API_PREFIXES = ["/api/auth", "/api/health"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
+  // Static assets and favicon pass through
   if (
-    pathname === "/" ||
-    pathname.startsWith(AUTH_API) ||
-    PUBLIC_API.some((p) => pathname.startsWith(p))
+    pathname.startsWith("/_next") ||
+    pathname.includes(".") ||
+    pathname === "/favicon.ico"
   ) {
     return NextResponse.next();
   }
 
-  // Check if protected
-  const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p));
-  if (!isProtected) return NextResponse.next();
+  // Allow public landing and public API endpoints
+  if (
+    pathname === "/" ||
+    PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  ) {
+    return NextResponse.next();
+  }
 
-  // Check session cookie exists (iron-session uses a signed cookie)
+  // Check if accessing a protected page
+  const isProtectedPage = PROTECTED_PATHS.some((p) => pathname.startsWith(p));
   const sessionCookie = request.cookies.get("guardian_session");
-  if (!sessionCookie) {
+
+  if (isProtectedPage && !sessionCookie) {
     const url = new URL("/", request.url);
     url.searchParams.set("auth", "required");
     return NextResponse.redirect(url);

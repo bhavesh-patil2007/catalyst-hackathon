@@ -31,7 +31,7 @@ export async function requireAuthorizedActor(
     const profileId = session.profileId || guardianStore.getProfile().id;
     const memberName = session.memberName || "Authorized Member";
 
-    // 1. Role verification
+    // 1. Role authorization
     if (!allowedRoles.includes(role)) {
       return {
         success: false,
@@ -45,8 +45,8 @@ export async function requireAuthorizedActor(
       };
     }
 
-    // 2. Patient-level boundary check
-    if (targetProfileId && profileId !== targetProfileId) {
+    // 2. Patient boundary verification
+    if (targetProfileId && !guardianStore.verifyPatientAccess(profileId, targetProfileId)) {
       return {
         success: false,
         response: NextResponse.json(
@@ -70,7 +70,7 @@ export async function requireAuthorizedActor(
     };
   }
 
-  // If unauthenticated, return 401 Unauthorized
+  // Unauthenticated requests receive 401 Unauthorized
   return {
     success: false,
     response: NextResponse.json(
@@ -84,8 +84,9 @@ export async function requireAuthorizedActor(
 }
 
 /**
- * Safe fallback for local development and non-interactive demo environments.
- * Extracts session if available; if not in production and demo headers are sent, allows verified testing.
+ * Authenticates request from session, strictly isolating any test header simulation
+ * to test environments (NODE_ENV === "test").
+ * In production, client headers are NEVER honored and always rejected if session is absent.
  */
 export async function getActorFromSessionOrHeader(
   request: Request,
@@ -98,60 +99,67 @@ export async function getActorFromSessionOrHeader(
     return requireAuthorizedActor(allowedRoles, targetProfileId);
   }
 
-  // Support local demo / unit test simulated header
-  const demoRole = request.headers.get("x-guardian-role") as UserRole | null;
-  const demoProfileId = request.headers.get("x-guardian-profile-id") || guardianStore.getProfile().id;
-  const demoActorName = request.headers.get("x-guardian-actor-name") || "Demo User";
-
-  if (demoRole && ["owner", "family_manager", "caregiver", "read_only"].includes(demoRole)) {
-    if (!allowedRoles.includes(demoRole)) {
-      return {
-        success: false,
-        response: NextResponse.json(
-          {
-            success: false,
-            error: `Forbidden: role '${demoRole}' is not authorized.`,
-          },
-          { status: 403 }
-        ),
-      };
-    }
-
-    if (targetProfileId && demoProfileId !== targetProfileId) {
-      return {
-        success: false,
-        response: NextResponse.json(
-          {
-            success: false,
-            error: "Forbidden: cross-patient access denied.",
-          },
-          { status: 403 }
-        ),
-      };
-    }
-
+  // In production, NEVER trust client-supplied headers or fall back to demo accounts
+  if (process.env.NODE_ENV === "production") {
     return {
-      success: true,
-      actor: {
-        role: demoRole,
-        memberName: demoActorName,
-        profileId: demoProfileId,
-        authenticated: true,
-      },
+      success: false,
+      response: NextResponse.json(
+        {
+          success: false,
+          error: "Authentication required. Session is invalid or expired.",
+        },
+        { status: 401 }
+      ),
     };
   }
 
-  // Default demo access if not in production (allows evaluator UI to function if unauthenticated)
-  if (process.env.NODE_ENV !== "production") {
-    return {
-      success: true,
-      actor: {
-        role: "family_manager",
-        memberName: "Sarah Thompson",
-        profileId: guardianStore.getProfile().id,
-        authenticated: false,
-      },
-    };
+  // Simulated identity headers are restricted EXCLUSIVELY to test runners
+  const isTestEnvironment =
+    process.env.NODE_ENV === "test" || process.env.ENABLE_TEST_AUTH_HEADERS === "true";
+
+  if (isTestEnvironment) {
+    const demoRole = request.headers.get("x-guardian-role") as UserRole | null;
+    const demoProfileId =
+      request.headers.get("x-guardian-profile-id") || guardianStore.getProfile().id;
+    const demoActorName = request.headers.get("x-guardian-actor-name") || "Test Simulated User";
+
+    if (demoRole && ["owner", "family_manager", "caregiver", "read_only"].includes(demoRole)) {
+      if (!allowedRoles.includes(demoRole)) {
+        return {
+          success: false,
+          response: NextResponse.json(
+            {
+              success: false,
+              error: `Forbidden: role '${demoRole}' is not authorized.`,
+            },
+            { status: 403 }
+          ),
+        };
+      }
+
+      if (targetProfileId && !guardianStore.verifyPatientAccess(demoProfileId, targetProfileId)) {
+        return {
+          success: false,
+          response: NextResponse.json(
+            {
+              success: false,
+              error: "Forbidden: cross-patient access denied.",
+            },
+            { status: 403 }
+          ),
+        };
+      }
+
+      return {
+        success: true,
+        actor: {
+          role: demoRole,
+          memberName: demoActorName,
+          profileId: demoProfileId,
+          authenticated: true,
+        },
+      };
+    }
   }
 
   return {
@@ -159,7 +167,7 @@ export async function getActorFromSessionOrHeader(
     response: NextResponse.json(
       {
         success: false,
-        error: "Authentication required.",
+        error: "Authentication required. Please log in.",
       },
       { status: 401 }
     ),

@@ -6,14 +6,12 @@ import { getActorFromSessionOrHeader } from "@/lib/authGuard";
 const claimSchema = z.object({
   action: z.literal("claim"),
   taskId: z.string().min(1),
-  caregiverName: z.string().optional(),
   careProfileId: z.string().optional(),
 });
 
 const handoffSchema = z.object({
   action: z.literal("handoff"),
   taskId: z.string().min(1),
-  fromCaregiver: z.string().optional(),
   toCaregiver: z.string().min(1),
   note: z.string().min(1),
   careProfileId: z.string().optional(),
@@ -30,7 +28,12 @@ const resolveSchema = z.object({
     "handed_off",
   ]),
   note: z.string().min(1),
-  actorName: z.string().optional(),
+  careProfileId: z.string().optional(),
+});
+
+const backupSchema = z.object({
+  action: z.literal("backup_request"),
+  reason: z.string().min(1).optional(),
   careProfileId: z.string().optional(),
 });
 
@@ -59,8 +62,9 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "claim") {
-      const { taskId, caregiverName } = claimSchema.parse(body);
-      const claimer = caregiverName || actor.memberName;
+      const { taskId } = claimSchema.parse(body);
+      // Strictly derive claimer from verified session
+      const claimer = actor.memberName;
       const task = guardianStore.claimTask(taskId, claimer);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
@@ -69,8 +73,9 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "handoff") {
-      const { taskId, fromCaregiver, toCaregiver, note } = handoffSchema.parse(body);
-      const assignor = fromCaregiver || actor.memberName;
+      const { taskId, toCaregiver, note } = handoffSchema.parse(body);
+      // Strictly derive assignor from verified session
+      const assignor = actor.memberName;
       const task = guardianStore.handoffTask(taskId, assignor, toCaregiver, note);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
@@ -79,8 +84,9 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "resolve") {
-      const { taskId, outcome, note, actorName } = resolveSchema.parse(body);
-      const resolver = actorName || actor.memberName;
+      const { taskId, outcome, note } = resolveSchema.parse(body);
+      // Strictly derive resolver from verified session
+      const resolver = actor.memberName;
       const task = guardianStore.resolveTask(taskId, outcome, note, resolver);
       if (!task) {
         return NextResponse.json({ success: false, error: "Task not found" }, { status: 404 });
@@ -89,8 +95,9 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "backup_request" || body.type === "BACKUP_REQUEST") {
-      const caregiverName = body.caregiverName || actor.memberName;
-      const reason = body.reason || "Caregiver wellbeing trend indicates elevated fatigue & workload";
+      const parsed = backupSchema.safeParse(body);
+      const reason = (parsed.success && parsed.data.reason) || "Caregiver wellbeing trend indicates elevated fatigue & workload";
+      const caregiverName = actor.memberName;
       const task = guardianStore.createBackupRequest({
         caregiverName,
         reason,

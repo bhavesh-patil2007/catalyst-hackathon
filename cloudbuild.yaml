@@ -16,7 +16,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/careorbit:latest']
 
-  # 3. Deploy to Google Cloud Run
+  # 3. Deploy to Google Cloud Run with Secret Manager integration
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -32,6 +32,10 @@ steps:
       - '--allow-unauthenticated'
       - '--port'
       - '8080'
+      - '--set-env-vars'
+      - 'NODE_ENV=production,PORT=8080'
+      - '--set-secrets'
+      - 'IRON_SESSION_SECRET=iron-session-secret:latest,CRON_SECRET=cron-secret:latest,GEMINI_API_KEY=gemini-api-key:latest,RESEND_API_KEY=resend-api-key:latest,DATABASE_URL=database-url:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/careorbit:$COMMIT_SHA'

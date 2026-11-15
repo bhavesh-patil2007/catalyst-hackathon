@@ -13,8 +13,6 @@ const checkInSchema = z.object({
     "NOT_SURE",
     "PENDING",
   ]),
-  actorName: z.string().optional(),
-  actorRole: z.enum(["owner", "family_manager", "caregiver", "read_only"]).optional(),
   note: z.string().optional(),
   doNotNotifyFamily: z.boolean().optional(),
   careProfileId: z.string().optional(),
@@ -45,6 +43,7 @@ export async function POST(request: Request) {
       );
     }
 
+    // Actor identity strictly derived from server-side verified session
     const updated = guardianStore.recordCheckIn(
       validated.occurrenceId,
       validated.status,
@@ -61,13 +60,20 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({ success: true, data: updated });
+    return NextResponse.json({
+      success: true,
+      data: updated,
+      actor: {
+        name: actor.memberName,
+        role: actor.role,
+      },
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ success: false, errors: error.errors }, { status: 400 });
     }
     return NextResponse.json(
-      { success: false, error: "Internal server error" },
+      { success: false, error: "Failed to record dose check-in" },
       { status: 500 }
     );
   }

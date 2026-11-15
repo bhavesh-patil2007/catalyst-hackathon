@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { INITIAL_PROFILE } from "@/lib/store";
 import { getSession } from "@/lib/session";
+import { isDemoCredential, verifySecret, DEMO_CREDENTIALS } from "@/lib/authCrypto";
 
-// Simple in-memory rate limiter
+// In-memory IP rate limiter: 5 attempts per minute
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(ip: string): boolean {
@@ -45,7 +46,25 @@ export async function POST(request: Request) {
       );
     }
 
-    if (pin !== INITIAL_PROFILE.passcode) {
+    // Reject hardcoded demo credentials in production environments
+    if (process.env.NODE_ENV === "production" && isDemoCredential(pin)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Demo credentials are strictly prohibited in production.",
+        },
+        { status: 401 }
+      );
+    }
+
+    // Verify using salted scrypt cryptographic hashing
+    const isValid = verifySecret(
+      pin,
+      DEMO_CREDENTIALS.elderPin.hash,
+      DEMO_CREDENTIALS.elderPin.salt
+    );
+
+    if (!isValid) {
       return NextResponse.json(
         { success: false, error: "Incorrect PIN" },
         { status: 401 }

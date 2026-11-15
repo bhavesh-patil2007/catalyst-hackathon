@@ -18,7 +18,9 @@ export interface WellbeingCheckIn {
   timestamp: string;
 }
 
-type BurnoutRisk = "low" | "moderate" | "high";
+export type CheckInRecord = WellbeingCheckIn;
+
+export type BurnoutRisk = "low" | "moderate" | "high";
 
 // In-memory store: map of caregiverId → array of check-ins (last 30 days)
 const store = new Map<string, WellbeingCheckIn[]>();
@@ -69,4 +71,8 @@ export function getBurnoutRisk(caregiverId: string): BurnoutRisk {
   if (composite < 2.5) return "high";
   if (composite < 3.5) return "moderate";
   return "low";
+}
+
+export function clearCheckInsForTesting(): void {
+  store.clear();
 }
