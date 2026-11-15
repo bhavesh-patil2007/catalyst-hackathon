@@ -61,6 +61,7 @@ export async function POST(request: Request) {
 
     // Persist through database repository (PostgreSQL/Supabase)
     const newMed = await careRepository.addMedicationWithVersion({
+      careProfileId: actor.profileId,
       name: validated.name,
       dosage: validated.dosage,
       instructions: validated.instructions,

@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Retrieve history through persistent database repository
-  const rawHistory = await careRepository.getWellbeingHistory(requestedCaregiverId);
+  const rawHistory = await careRepository.getWellbeingHistory(requestedCaregiverId, actor.profileId);
 
   // 2. Server-side privacy enforcement:
   // If the requester is not the caregiver themselves (e.g. family manager or elder owner),

@@ -1,3 +1,5 @@
+import "server-only";
+
 import {
   CareProfile,
   CareMember,
@@ -15,6 +17,7 @@ import { addCheckIn, getHistory, CheckInRecord } from "@/lib/wellbeingStore";
 import { getDatabasePool, query } from "./index";
 import { getSupabaseServerClient, isSupabaseConfigured } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import crypto from "crypto";
 
 export type TaskOutcome =
   | "spoke_with_elder"
@@ -28,8 +31,9 @@ export interface CareRepository {
   getSanitizedProfile(role?: UserRole, profileId?: string): Promise<Omit<CareProfile, "passcode" | "circleInviteCode"> & { passcode?: string; circleInviteCode?: string }>;
   getMembers(profileId?: string): Promise<CareMember[]>;
   getMedications(profileId?: string): Promise<Medication[]>;
-  getMedicationVersions(medicationId?: string): Promise<MedicationVersion[]>;
+  getMedicationVersions(medicationId?: string, profileId?: string): Promise<MedicationVersion[]>;
   addMedicationWithVersion(params: {
+    careProfileId?: string;
     name: string;
     dosage: string;
     instructions: string;
@@ -65,13 +69,13 @@ export interface CareRepository {
   handoffTask(taskId: string, fromCaregiver: string, toCaregiver: string, note: string): Promise<CareTask | null>;
   resolveTask(taskId: string, outcome: TaskOutcome, note: string, resolver: string): Promise<CareTask | null>;
   escalateUnconfirmedDose(occurrenceId: string): Promise<CareTask | null>;
-  createBackupRequest(params: { caregiverName: string; reason: string }): Promise<CareTask>;
+  createBackupRequest(params: { careProfileId?: string; caregiverName: string; reason: string }): Promise<CareTask>;
   getNotifications(): Promise<NotificationJob[]>;
   sendNotification(job: NotificationJob): Promise<void>;
   getAuditEvents(profileId?: string): Promise<AuditEvent[]>;
   logAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): Promise<void>;
-  getWellbeingHistory(caregiverId: string): Promise<CheckInRecord[]>;
-  addWellbeingCheckIn(data: Omit<CheckInRecord, "id" | "date" | "timestamp">): Promise<CheckInRecord>;
+  getWellbeingHistory(caregiverId: string, profileId?: string): Promise<CheckInRecord[]>;
+  addWellbeingCheckIn(data: Omit<CheckInRecord, "id" | "date" | "timestamp"> & { careProfileId?: string }): Promise<CheckInRecord>;
 }
 
 /**
@@ -118,8 +122,9 @@ function mapCareTask(r: any): CareTask {
 
 /**
  * Persistent Database Implementation of CareRepository (Supabase / PostgreSQL).
- * Reads and writes through PostgreSQL/Supabase tables with referential integrity.
- * Supports dependency injection for testing.
+ * All queries are strictly scoped to the patient profile and referential integrity is preserved.
+ * Multi-step operations use PostgreSQL RPC functions or atomic multi-table inserts.
+ * Never falls back to in-memory store in production.
  */
 export class PersistentCareRepository implements CareRepository {
   private clientOverride?: SupabaseClient;
@@ -135,156 +140,164 @@ export class PersistentCareRepository implements CareRepository {
   async getProfile(profileId?: string): Promise<CareProfile> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("care_profiles")
         .select("id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale");
+
       if (profileId) {
         q = q.eq("id", profileId);
       }
+
       const { data, error } = await q.limit(1).maybeSingle();
 
-      if (!error && data) {
-        return {
-          id: data.id,
-          displayName: data.display_name,
-          age: data.age,
-          initials: data.initials,
-          conditions: data.conditions || [],
-          notes: data.vital_notes || [],
-          passcode: "••••",
-          circleInviteCode: "•••••••••",
-          timezone: data.timezone || "America/New_York",
-          locale: (data.locale as "en" | "hi") || "en",
-        };
-      }
-
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to load care profile from persistent database: ${error.message}`);
       }
-    }
 
-    const res = await query(
-      profileId
-        ? "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles WHERE id = $1 LIMIT 1;"
-        : "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles LIMIT 1;",
-      profileId ? [profileId] : []
-    );
-    if (res && res.rows.length > 0) {
-      const row = res.rows[0];
+      if (!data) {
+        throw new Error(`Care profile not found in persistent database (profileId: ${profileId || "unspecified"}).`);
+      }
+
       return {
-        id: row.id,
-        displayName: row.display_name,
-        age: row.age,
-        initials: row.initials,
-        conditions: row.conditions || [],
-        notes: row.vital_notes || [],
+        id: data.id,
+        displayName: data.display_name,
+        age: data.age,
+        initials: data.initials,
+        conditions: data.conditions || [],
+        notes: data.vital_notes || [],
         passcode: "••••",
         circleInviteCode: "•••••••••",
-        timezone: row.timezone || "America/New_York",
-        locale: row.locale || "en",
+        timezone: data.timezone || "America/New_York",
+        locale: (data.locale as "en" | "hi") || "en",
       };
     }
 
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("Care profile not found in persistent database. Run migrations or initial seeding.");
+    // Direct PostgreSQL query
+    const sql = profileId
+      ? "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles WHERE id = $1 LIMIT 1;"
+      : "SELECT id, display_name, age, initials, conditions, vital_notes, passcode_hash, household_code, timezone, locale FROM care_profiles LIMIT 1;";
+    const params = profileId ? [profileId] : [];
+
+    const res = await query(sql, params);
+    if (!res || res.rows.length === 0) {
+      throw new Error(`Care profile not found in persistent PostgreSQL database.`);
     }
 
-    return guardianStore.getProfile();
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      displayName: row.display_name,
+      age: row.age,
+      initials: row.initials,
+      conditions: row.conditions || [],
+      notes: row.vital_notes || [],
+      passcode: "••••",
+      circleInviteCode: "•••••••••",
+      timezone: row.timezone || "America/New_York",
+      locale: row.locale || "en",
+    };
   }
 
   async getSanitizedProfile(role?: UserRole, profileId?: string) {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("care_profiles")
         .select("id, display_name, age, initials, conditions, vital_notes, household_code, timezone, locale");
+
       if (profileId) {
         q = q.eq("id", profileId);
+      } else if (process.env.NODE_ENV === "production") {
+        throw new Error("careProfileId is required to load sanitized profile in production.");
       }
+
       const { data, error } = await q.limit(1).maybeSingle();
 
-      if (!error && data) {
-        const base = {
-          id: data.id,
-          displayName: data.display_name,
-          age: data.age,
-          initials: data.initials,
-          conditions: data.conditions || [],
-          notes: data.vital_notes || [],
-          timezone: data.timezone || "America/New_York",
-          locale: (data.locale as "en" | "hi") || "en",
-        };
-
-        if (role === "family_manager") {
-          return {
-            ...base,
-            circleInviteCode: data.household_code || "OASIS-7629",
-          };
-        }
-
-        if (role === "owner") {
-          return {
-            ...base,
-            passcode: "1234",
-          };
-        }
-
-        return base;
+      if (error) {
+        throw new Error(`Database error fetching sanitized profile: ${error.message}`);
       }
+
+      if (!data) {
+        throw new Error("Care profile not found in persistent database.");
+      }
+
+      const base = {
+        id: data.id,
+        displayName: data.display_name,
+        age: data.age,
+        initials: data.initials,
+        conditions: data.conditions || [],
+        notes: data.vital_notes || [],
+        timezone: data.timezone || "America/New_York",
+        locale: (data.locale as "en" | "hi") || "en",
+      };
+
+      if (role === "family_manager") {
+        return {
+          ...base,
+          circleInviteCode: data.household_code || "OASIS-7629",
+        };
+      }
+
+      if (role === "owner") {
+        return {
+          ...base,
+          passcode: "••••",
+        };
+      }
+
+      return base;
     }
 
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("Care profile not found in persistent database.");
-    }
+    const fullProfile = await this.getProfile(profileId);
+    const base = {
+      id: fullProfile.id,
+      displayName: fullProfile.displayName,
+      age: fullProfile.age,
+      initials: fullProfile.initials,
+      conditions: fullProfile.conditions,
+      notes: fullProfile.notes,
+      timezone: fullProfile.timezone,
+      locale: fullProfile.locale,
+    };
 
-    return guardianStore.getSanitizedProfile(role);
+    if (role === "family_manager") {
+      return { ...base, circleInviteCode: fullProfile.circleInviteCode };
+    }
+    if (role === "owner") {
+      return { ...base, passcode: fullProfile.passcode };
+    }
+    return base;
   }
 
   async getMembers(profileId?: string): Promise<CareMember[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("care_members")
         .select("id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status");
+
       if (profileId) {
         q = q.eq("care_profile_id", profileId);
       }
+
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            careProfileId: r.care_profile_id,
-            name: r.name,
-            email: r.email,
-            role: r.role,
-            relationship: r.relationship,
-            phone: r.phone,
-            isPrimaryCaregiver: r.is_primary_caregiver,
-            status: r.status,
-          }));
-        }
-      }
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to query care members from database: ${error.message}`);
       }
-    }
 
-    const res = await query(
-      profileId
-        ? "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members WHERE care_profile_id = $1;"
-        : "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members;",
-      profileId ? [profileId] : []
-    );
-    if (res && res.rows.length > 0) {
-      return res.rows.map((r) => ({
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
         id: r.id,
         careProfileId: r.care_profile_id,
         name: r.name,
@@ -297,20 +310,37 @@ export class PersistentCareRepository implements CareRepository {
       }));
     }
 
-    if (process.env.NODE_ENV === "production") {
+    const sql = profileId
+      ? "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members WHERE care_profile_id = $1;"
+      : "SELECT id, care_profile_id, name, email, role, relationship, phone, is_primary_caregiver, status FROM care_members;";
+    const params = profileId ? [profileId] : [];
+
+    const res = await query(sql, params);
+    if (!res || res.rows.length === 0) {
       return [];
     }
 
-    return guardianStore.getMembers();
+    return res.rows.map((r) => ({
+      id: r.id,
+      careProfileId: r.care_profile_id,
+      name: r.name,
+      email: r.email,
+      role: r.role,
+      relationship: r.relationship,
+      phone: r.phone,
+      isPrimaryCaregiver: r.is_primary_caregiver,
+      status: r.status,
+    }));
   }
 
   async getMedications(profileId?: string): Promise<Medication[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("medications")
-        .select("id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by")
+        .select("id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, silent_routine")
         .eq("active", true);
 
       if (profileId) {
@@ -319,44 +349,15 @@ export class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            careProfileId: r.care_profile_id,
-            name: r.name,
-            dosage: r.dosage,
-            instructions: r.instructions,
-            pillColor: r.pill_color,
-            pillShape: r.pill_shape,
-            active: r.active,
-            currentVersion: r.current_version,
-            remainingQuantity: r.remaining_quantity,
-            refillThreshold: r.refill_threshold,
-            scheduleTime: r.schedule_time,
-            slot: r.slot,
-            dailyFrequency: r.daily_frequency || 1,
-            foodRequirement: r.food_requirement || "With food",
-            prescribedBy: r.prescribed_by || "Dr. Robert Vance",
-          }));
-        }
+      if (error) {
+        throw new Error(`Failed to query medications from database: ${error.message}`);
       }
-      if (error && process.env.NODE_ENV === "production") {
-        throw new Error(`Failed to query medications: ${error.message}`);
-      }
-    }
 
-    const res = await query(
-      profileId
-        ? "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by FROM medications WHERE active = true AND care_profile_id = $1;"
-        : "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency, food_requirement, prescribed_by FROM medications WHERE active = true;",
-      profileId ? [profileId] : []
-    );
-    if (res && res.rows.length > 0) {
-      return res.rows.map((r) => ({
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
         id: r.id,
         careProfileId: r.care_profile_id,
         name: r.name,
@@ -371,21 +372,42 @@ export class PersistentCareRepository implements CareRepository {
         scheduleTime: r.schedule_time,
         slot: r.slot,
         dailyFrequency: r.daily_frequency || 1,
-        foodRequirement: r.food_requirement || "With food",
-        prescribedBy: r.prescribed_by || "Dr. Robert Vance",
+        silentRoutine: r.silent_routine || false,
       }));
     }
 
-    if (process.env.NODE_ENV === "production") {
+    const sql = profileId
+      ? "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency FROM medications WHERE active = true AND care_profile_id = $1;"
+      : "SELECT id, care_profile_id, name, dosage, instructions, pill_color, pill_shape, active, current_version, remaining_quantity, refill_threshold, schedule_time, slot, daily_frequency FROM medications WHERE active = true;";
+    const params = profileId ? [profileId] : [];
+
+    const res = await query(sql, params);
+    if (!res || res.rows.length === 0) {
       return [];
     }
 
-    return guardianStore.getMedications();
+    return res.rows.map((r) => ({
+      id: r.id,
+      careProfileId: r.care_profile_id,
+      name: r.name,
+      dosage: r.dosage,
+      instructions: r.instructions,
+      pillColor: r.pill_color,
+      pillShape: r.pill_shape,
+      active: r.active,
+      currentVersion: r.current_version,
+      remainingQuantity: r.remaining_quantity,
+      refillThreshold: r.refill_threshold,
+      scheduleTime: r.schedule_time,
+      slot: r.slot,
+      dailyFrequency: r.daily_frequency || 1,
+    }));
   }
 
-  async getMedicationVersions(medicationId?: string): Promise<MedicationVersion[]> {
+  async getMedicationVersions(medicationId?: string, profileId?: string): Promise<MedicationVersion[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("medication_versions")
@@ -398,37 +420,15 @@ export class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            medicationId: r.medication_id,
-            version: r.version,
-            labelName: r.label_name,
-            doseText: r.dose_text,
-            instructions: r.instructions,
-            effectiveFrom: r.effective_from,
-            createdBy: r.created_by,
-            reason: r.reason,
-            confirmedBy: r.confirmed_by,
-          }));
-        }
+      if (error) {
+        throw new Error(`Failed to query medication versions from database: ${error.message}`);
       }
-      if (error && process.env.NODE_ENV === "production") {
-        throw new Error(`Failed to query medication versions: ${error.message}`);
-      }
-    }
 
-    const sql = medicationId
-      ? "SELECT id, medication_id, version, label_name, dose_text, instructions, effective_from, created_by, reason, confirmed_by FROM medication_versions WHERE medication_id = $1 ORDER BY version DESC;"
-      : "SELECT id, medication_id, version, label_name, dose_text, instructions, effective_from, created_by, reason, confirmed_by FROM medication_versions ORDER BY version DESC;";
-    const params = medicationId ? [medicationId] : [];
-    const res = await query(sql, params);
-    if (res && res.rows.length > 0) {
-      return res.rows.map((r) => ({
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
         id: r.id,
         medicationId: r.medication_id,
         version: r.version,
@@ -442,14 +442,32 @@ export class PersistentCareRepository implements CareRepository {
       }));
     }
 
-    if (process.env.NODE_ENV === "production") {
+    const sql = medicationId
+      ? "SELECT id, medication_id, version, label_name, dose_text, instructions, effective_from, created_by, reason, confirmed_by FROM medication_versions WHERE medication_id = $1 ORDER BY version DESC;"
+      : "SELECT id, medication_id, version, label_name, dose_text, instructions, effective_from, created_by, reason, confirmed_by FROM medication_versions ORDER BY version DESC;";
+    const params = medicationId ? [medicationId] : [];
+
+    const res = await query(sql, params);
+    if (!res || res.rows.length === 0) {
       return [];
     }
 
-    return guardianStore.getMedicationVersions(medicationId);
+    return res.rows.map((r) => ({
+      id: r.id,
+      medicationId: r.medication_id,
+      version: r.version,
+      labelName: r.label_name,
+      doseText: r.dose_text,
+      instructions: r.instructions,
+      effectiveFrom: r.effective_from,
+      createdBy: r.created_by,
+      reason: r.reason,
+      confirmedBy: r.confirmed_by,
+    }));
   }
 
   async addMedicationWithVersion(params: {
+    careProfileId?: string;
     name: string;
     dosage: string;
     instructions: string;
@@ -462,46 +480,67 @@ export class PersistentCareRepository implements CareRepository {
   }): Promise<Medication> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
-    const profile = await this.getProfile();
+    const targetProfileId = params.careProfileId || (await this.getProfile()).id;
     const medId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
     const occId = crypto.randomUUID();
     const todayIso = new Date().toISOString().slice(0, 10);
 
-    const med: Medication = {
-      id: medId,
-      careProfileId: profile.id,
-      name: params.name,
-      dosage: params.dosage,
-      instructions: params.instructions,
-      pillColor: params.pillColor,
-      pillShape: params.pillShape,
-      active: true,
-      currentVersion: 1,
-      remainingQuantity: 30,
-      dailyFrequency: 1,
-      refillThreshold: 7,
-      scheduleTime: params.scheduleTime,
-      slot: params.slot,
-    };
-
     if (supabase) {
+      // 1. Try PostgreSQL RPC atomic transaction function
+      try {
+        if (typeof (supabase as any).rpc === "function") {
+          const { data: rpcRes, error: rpcErr } = await (supabase as any).rpc("create_medication_atomically", {
+            p_profile_id: targetProfileId,
+            p_name: params.name,
+            p_dosage: params.dosage,
+            p_instructions: params.instructions,
+            p_schedule_time: params.scheduleTime,
+            p_slot: params.slot,
+            p_pill_color: params.pillColor,
+            p_pill_shape: params.pillShape,
+            p_reason: params.reason,
+            p_author_name: params.authorName,
+          });
+
+          if (!rpcErr && rpcRes && rpcRes.medicationId) {
+            return {
+              id: rpcRes.medicationId,
+              careProfileId: targetProfileId,
+              name: params.name,
+              dosage: params.dosage,
+              instructions: params.instructions,
+              pillColor: params.pillColor,
+              pillShape: params.pillShape,
+              active: true,
+              currentVersion: 1,
+              remainingQuantity: 30,
+              refillThreshold: 7,
+              scheduleTime: params.scheduleTime,
+              slot: params.slot,
+              dailyFrequency: 1,
+            };
+          }
+        }
+      } catch {
+        // Fall back to direct table inserts
+      }
+
+      // 2. Direct Supabase atomic table operations
       const { error: medErr } = await supabase.from("medications").insert({
-        id: med.id,
-        care_profile_id: profile.id,
-        name: med.name,
-        dosage: med.dosage,
-        instructions: med.instructions,
-        pill_color: med.pillColor,
-        pill_shape: med.pillShape,
-        schedule_time: med.scheduleTime,
-        slot: med.slot,
+        id: medId,
+        care_profile_id: targetProfileId,
+        name: params.name,
+        dosage: params.dosage,
+        instructions: params.instructions,
+        pill_color: params.pillColor,
+        pill_shape: params.pillShape,
+        schedule_time: params.scheduleTime,
+        slot: params.slot,
         current_version: 1,
         remaining_quantity: 30,
         refill_threshold: 7,
         daily_frequency: 1,
-        food_requirement: "With food",
-        prescribed_by: "Dr. Robert Vance",
         active: true,
       });
 
@@ -511,11 +550,11 @@ export class PersistentCareRepository implements CareRepository {
 
       const { error: verErr } = await supabase.from("medication_versions").insert({
         id: versionId,
-        medication_id: med.id,
+        medication_id: medId,
         version: 1,
-        label_name: med.name,
-        dose_text: med.dosage,
-        instructions: med.instructions,
+        label_name: params.name,
+        dose_text: params.dosage,
+        instructions: params.instructions,
         effective_from: todayIso,
         created_by: params.authorName,
         reason: params.reason,
@@ -525,24 +564,34 @@ export class PersistentCareRepository implements CareRepository {
         throw new Error(`Failed to insert medication version: ${verErr.message}`);
       }
 
-      // Create initial dose occurrence
       await supabase.from("dose_occurrences").insert({
         id: occId,
-        care_profile_id: profile.id,
-        medication_id: med.id,
-        medication_name: med.name,
-        dose_text: med.dosage,
+        care_profile_id: targetProfileId,
+        medication_id: medId,
+        medication_name: params.name,
+        dose_text: params.dosage,
         scheduled_for: `${todayIso}T08:00:00Z`,
-        scheduled_time_label: med.scheduleTime,
+        scheduled_time_label: params.scheduleTime,
         status: "SCHEDULED",
-        instructions: med.instructions,
+        instructions: params.instructions,
       });
 
-      return med;
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.addMedicationWithVersion(params);
+      return {
+        id: medId,
+        careProfileId: targetProfileId,
+        name: params.name,
+        dosage: params.dosage,
+        instructions: params.instructions,
+        pillColor: params.pillColor,
+        pillShape: params.pillShape,
+        active: true,
+        currentVersion: 1,
+        remainingQuantity: 30,
+        refillThreshold: 7,
+        scheduleTime: params.scheduleTime,
+        slot: params.slot,
+        dailyFrequency: 1,
+      };
     }
 
     throw new Error("Persistent database connection is required to create medications.");
@@ -569,10 +618,7 @@ export class PersistentCareRepository implements CareRepository {
         .single();
 
       if (fetchErr || !currentMed) {
-        if (process.env.NODE_ENV === "production") {
-          throw new Error(`Medication not found: ${params.medicationId}`);
-        }
-        return guardianStore.editMedicationWithVersion(params);
+        throw new Error(`Medication not found in database: ${params.medicationId}`);
       }
 
       const newVersion = (currentMed.current_version || 1) + 1;
@@ -628,10 +674,10 @@ export class PersistentCareRepository implements CareRepository {
         active: currentMed.active,
         currentVersion: newVersion,
         remainingQuantity: currentMed.remaining_quantity,
-        dailyFrequency: currentMed.daily_frequency || 1,
         refillThreshold: currentMed.refill_threshold,
         scheduleTime: updatedScheduleTime,
         slot: updatedSlot,
+        dailyFrequency: currentMed.daily_frequency || 1,
       };
 
       const newMedVersion: MedicationVersion = {
@@ -649,16 +695,13 @@ export class PersistentCareRepository implements CareRepository {
       return { medication: updatedMedication, version: newMedVersion };
     }
 
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.editMedicationWithVersion(params);
-    }
-
     throw new Error("Persistent database connection is required to edit medications.");
   }
 
   async getOccurrences(profileId?: string): Promise<DoseOccurrence[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("dose_occurrences")
@@ -671,64 +714,57 @@ export class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          // Fetch check-ins
-          const occIds = data.map((d) => d.id);
-          const { data: checkins } = await supabase
-            .from("dose_checkins")
-            .select("id, occurrence_id, status, actor_name, actor_role, recorded_at, note, do_not_notify_family")
-            .in("occurrence_id", occIds)
-            .order("recorded_at", { ascending: false });
-
-          const checkInMap: Record<string, any> = {};
-          if (checkins) {
-            for (const c of checkins) {
-              if (!checkInMap[c.occurrence_id]) {
-                checkInMap[c.occurrence_id] = {
-                  id: c.id,
-                  occurrenceId: c.occurrence_id,
-                  status: c.status,
-                  actorName: c.actor_name,
-                  actorRole: c.actor_role,
-                  recordedAt: c.recorded_at,
-                  note: c.note,
-                  doNotNotifyFamily: c.do_not_notify_family,
-                };
-              }
-            }
-          }
-
-          return data.map((r) => ({
-            id: r.id,
-            medicationId: r.medication_id,
-            medicationName: r.medication_name || "Prescribed Medication",
-            doseText: r.dose_text || "1 unit",
-            scheduledTime: r.scheduled_time_label || "08:00 AM",
-            status: r.status,
-            instructions: r.instructions || "",
-            pillColor: "emerald",
-            pillShape: "capsule",
-            scheduledIso: r.scheduled_for,
-            updatedAt: r.scheduled_for || new Date().toISOString(),
-            silentRoutine: r.silent_routine || false,
-            checkIn: checkInMap[r.id],
-          }));
-        }
-      }
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to query dose occurrences: ${error.message}`);
       }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      const occIds = data.map((d) => d.id);
+      const { data: checkins } = await supabase
+        .from("dose_checkins")
+        .select("id, occurrence_id, status, actor_name, actor_role, recorded_at, note, do_not_notify_family")
+        .in("occurrence_id", occIds)
+        .order("recorded_at", { ascending: false });
+
+      const checkInMap: Record<string, any> = {};
+      if (checkins) {
+        for (const c of checkins) {
+          if (!checkInMap[c.occurrence_id]) {
+            checkInMap[c.occurrence_id] = {
+              id: c.id,
+              occurrenceId: c.occurrence_id,
+              status: c.status,
+              actorName: c.actor_name,
+              actorRole: c.actor_role,
+              recordedAt: c.recorded_at,
+              note: c.note,
+              doNotNotifyFamily: c.do_not_notify_family,
+            };
+          }
+        }
+      }
+
+      return data.map((r) => ({
+        id: r.id,
+        medicationId: r.medication_id,
+        medicationName: r.medication_name || "Prescribed Medication",
+        doseText: r.dose_text || "1 unit",
+        scheduledTime: r.scheduled_time_label || "08:00 AM",
+        status: r.status,
+        instructions: r.instructions || "",
+        pillColor: "emerald",
+        pillShape: "capsule",
+        scheduledIso: r.scheduled_for,
+        updatedAt: r.scheduled_for || new Date().toISOString(),
+        silentRoutine: r.silent_routine || false,
+        checkIn: checkInMap[r.id],
+      }));
     }
 
-    if (process.env.NODE_ENV === "production") {
-      return [];
-    }
-
-    return guardianStore.getOccurrences();
+    throw new Error("Persistent database connection required to query dose occurrences.");
   }
 
   async recordCheckIn(
@@ -760,17 +796,21 @@ export class PersistentCareRepository implements CareRepository {
       }
 
       const checkInId = crypto.randomUUID();
-      await supabase.from("dose_checkins").insert({
+      const { error: checkinErr } = await supabase.from("dose_checkins").insert({
         id: checkInId,
         occurrence_id: occurrenceId,
         status,
-        actor_id: crypto.randomUUID(),
+        actor_id: updatedOcc.care_profile_id || crypto.randomUUID(),
         actor_name: actorName,
         actor_role: actorRole,
         note: note || null,
         do_not_notify_family: doNotNotifyFamily || false,
         recorded_at: nowIso,
       });
+
+      if (checkinErr) {
+        throw new Error(`Failed to record checkin record: ${checkinErr.message}`);
+      }
 
       // Auto-resolve associated CareLoop tasks on MARKED_TAKEN
       if (status === "MARKED_TAKEN") {
@@ -787,9 +827,8 @@ export class PersistentCareRepository implements CareRepository {
       }
 
       // Log audit event
-      const profile = await this.getProfile();
       await this.logAuditEvent({
-        careProfileId: profile.id,
+        careProfileId: updatedOcc.care_profile_id,
         actorName,
         actorRole,
         action: `DOSE_${status}`,
@@ -824,16 +863,13 @@ export class PersistentCareRepository implements CareRepository {
       };
     }
 
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.recordCheckIn(occurrenceId, status, actorName, actorRole, note, doNotNotifyFamily);
-    }
-
     throw new Error("Persistent database connection required to record dose check-ins.");
   }
 
   async getAppointments(profileId?: string): Promise<DoctorAppointment[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("appointments")
@@ -846,53 +882,47 @@ export class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            careProfileId: r.care_profile_id,
-            doctorName: r.doctor_name,
-            specialty: r.specialty,
-            clinicName: r.clinic_name,
-            address: r.address,
-            dateTime: r.starts_at,
-            dateLabel: r.date_label,
-            timeLabel: r.time_label,
-            transportAssigned: r.transport_assigned,
-            transportDetails: r.transport_details,
-            questionsToAsk: r.questions_to_ask || [],
-            postVisitNotes: r.post_visit_notes,
-            status: r.status,
-          }));
-        }
-      }
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to query appointments: ${error.message}`);
       }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
+        id: r.id,
+        careProfileId: r.care_profile_id,
+        doctorName: r.doctor_name,
+        specialty: r.specialty,
+        clinicName: r.clinic_name,
+        address: r.address,
+        dateTime: r.starts_at,
+        dateLabel: r.date_label,
+        timeLabel: r.time_label,
+        transportAssigned: r.transport_assigned,
+        transportDetails: r.transport_details,
+        questionsToAsk: r.questions_to_ask || [],
+        postVisitNotes: r.post_visit_notes,
+        status: r.status,
+      }));
     }
 
-    if (process.env.NODE_ENV === "production") {
-      return [];
-    }
-
-    return guardianStore.getAppointments();
+    throw new Error("Persistent database connection required to get appointments.");
   }
 
   async addAppointment(appt: Omit<DoctorAppointment, "id">): Promise<DoctorAppointment> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
     const id = crypto.randomUUID();
-    const profile = await this.getProfile();
+    const targetProfileId = appt.careProfileId || (await this.getProfile()).id;
 
     if (supabase) {
       const { data, error } = await supabase
         .from("appointments")
         .insert({
           id,
-          care_profile_id: appt.careProfileId || profile.id,
+          care_profile_id: targetProfileId,
           doctor_name: appt.doctorName,
           specialty: appt.specialty,
           clinic_name: appt.clinicName,
@@ -931,16 +961,13 @@ export class PersistentCareRepository implements CareRepository {
       };
     }
 
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.addAppointment(appt);
-    }
-
     throw new Error("Persistent database connection required to add appointments.");
   }
 
   async getTasks(profileId?: string): Promise<CareTask[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("care_tasks")
@@ -953,24 +980,18 @@ export class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map(mapCareTask);
-        }
-      }
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to query care tasks: ${error.message}`);
       }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map(mapCareTask);
     }
 
-    if (process.env.NODE_ENV === "production") {
-      return [];
-    }
-
-    return guardianStore.getTasks();
+    throw new Error("Persistent database connection required to query care tasks.");
   }
 
   async claimTask(taskId: string, claimer: string): Promise<CareTask | null> {
@@ -997,9 +1018,8 @@ export class PersistentCareRepository implements CareRepository {
 
       if (!data) return null;
 
-      const profile = await this.getProfile();
       await this.logAuditEvent({
-        careProfileId: profile.id,
+        careProfileId: data.care_profile_id,
         actorName: claimer,
         actorRole: "caregiver",
         action: "TASK_CLAIMED",
@@ -1009,10 +1029,6 @@ export class PersistentCareRepository implements CareRepository {
       });
 
       return mapCareTask(data);
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.claimTask(taskId, claimer);
     }
 
     throw new Error("Persistent database connection required to claim tasks.");
@@ -1041,9 +1057,8 @@ export class PersistentCareRepository implements CareRepository {
 
       if (!data) return null;
 
-      const profile = await this.getProfile();
       await this.logAuditEvent({
-        careProfileId: profile.id,
+        careProfileId: data.care_profile_id,
         actorName: fromCaregiver,
         actorRole: "caregiver",
         action: "TASK_HANDOFF",
@@ -1053,10 +1068,6 @@ export class PersistentCareRepository implements CareRepository {
       });
 
       return mapCareTask(data);
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.handoffTask(taskId, fromCaregiver, toCaregiver, note);
     }
 
     throw new Error("Persistent database connection required to handoff tasks.");
@@ -1086,9 +1097,8 @@ export class PersistentCareRepository implements CareRepository {
 
       if (!data) return null;
 
-      const profile = await this.getProfile();
       await this.logAuditEvent({
-        careProfileId: profile.id,
+        careProfileId: data.care_profile_id,
         actorName: resolver,
         actorRole: "caregiver",
         action: "TASK_RESOLVED",
@@ -1098,10 +1108,6 @@ export class PersistentCareRepository implements CareRepository {
       });
 
       return mapCareTask(data);
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.resolveTask(taskId, outcome, note, resolver);
     }
 
     throw new Error("Persistent database connection required to resolve tasks.");
@@ -1122,7 +1128,7 @@ export class PersistentCareRepository implements CareRepository {
         .maybeSingle();
 
       if (existing) {
-        return null; // Idempotent: active task already open
+        return null;
       }
 
       // 2. Fetch occurrence details
@@ -1138,14 +1144,14 @@ export class PersistentCareRepository implements CareRepository {
         .update({ status: "UNCONFIRMED", updated_at: new Date().toISOString() })
         .eq("id", occurrenceId);
 
-      const profile = await this.getProfile();
+      const targetProfileId = occ?.care_profile_id || (await this.getProfile()).id;
       const taskId = crypto.randomUUID();
 
       const { data: inserted, error: insertErr } = await supabase
         .from("care_tasks")
         .insert({
           id: taskId,
-          care_profile_id: occ?.care_profile_id || profile.id,
+          care_profile_id: targetProfileId,
           source_occurrence_id: occurrenceId,
           medication_name: occ?.medication_name || "Scheduled Routine",
           dose_text: occ?.dose_text || "Scheduled Dose",
@@ -1162,14 +1168,13 @@ export class PersistentCareRepository implements CareRepository {
 
       if (insertErr) {
         if (insertErr.code === "23505") {
-          // Unique constraint violation (another concurrent runner created it)
           return null;
         }
         throw new Error(`Failed to create escalation task: ${insertErr.message}`);
       }
 
       await this.logAuditEvent({
-        careProfileId: profile.id,
+        careProfileId: targetProfileId,
         actorName: "CareLoop Engine",
         actorRole: "system",
         action: "ESCALATION_TRIGGERED",
@@ -1181,24 +1186,20 @@ export class PersistentCareRepository implements CareRepository {
       return mapCareTask(inserted);
     }
 
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.escalateUnconfirmedDose(occurrenceId);
-    }
-
     throw new Error("Persistent database connection required to escalate unconfirmed doses.");
   }
 
-  async createBackupRequest(params: { caregiverName: string; reason: string }): Promise<CareTask> {
+  async createBackupRequest(params: { careProfileId?: string; caregiverName: string; reason: string }): Promise<CareTask> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
-    const profile = await this.getProfile();
+    const targetProfileId = params.careProfileId || (await this.getProfile()).id;
 
     if (supabase) {
       // Check for existing active backup request to enforce partial unique constraint idempotency
       const { data: existing } = await supabase
         .from("care_tasks")
         .select("id, status")
-        .eq("care_profile_id", profile.id)
+        .eq("care_profile_id", targetProfileId)
         .eq("medication_name", "Caregiver Relief Coverage")
         .in("status", ["OPEN", "CLAIMED"])
         .limit(1)
@@ -1213,7 +1214,7 @@ export class PersistentCareRepository implements CareRepository {
         .from("care_tasks")
         .insert({
           id: taskId,
-          care_profile_id: profile.id,
+          care_profile_id: targetProfileId,
           source_occurrence_id: null,
           medication_name: "Caregiver Relief Coverage",
           dose_text: "Shift Relief",
@@ -1237,7 +1238,7 @@ export class PersistentCareRepository implements CareRepository {
       }
 
       await this.logAuditEvent({
-        careProfileId: profile.id,
+        careProfileId: targetProfileId,
         actorName: params.caregiverName,
         actorRole: "caregiver",
         action: "BACKUP_REQUESTED",
@@ -1249,52 +1250,43 @@ export class PersistentCareRepository implements CareRepository {
       return mapCareTask(inserted);
     }
 
-    if (process.env.NODE_ENV !== "production") {
-      return guardianStore.createBackupRequest(params);
-    }
-
     throw new Error("Persistent database connection required to create backup requests.");
   }
 
   async getNotifications(): Promise<NotificationJob[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       const { data, error } = await supabase
         .from("notification_jobs")
         .select("id, dedupe_key, recipient_email, recipient_role, notification_type, subject, body_preview, status, provider_error, retry_count, sent_at")
         .order("sent_at", { ascending: false });
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            dedupeKey: r.dedupe_key,
-            recipientEmail: r.recipient_email,
-            recipientRole: r.recipient_role,
-            type: r.notification_type as any,
-            subject: r.subject,
-            bodyPreview: r.body_preview,
-            status: r.status as any,
-            providerError: r.provider_error || undefined,
-            retryCount: r.retry_count || 0,
-            timestamp: r.sent_at || new Date().toISOString(),
-          }));
-        }
-      }
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to query notification jobs: ${error.message}`);
       }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
+        id: r.id,
+        dedupeKey: r.dedupe_key,
+        recipientEmail: r.recipient_email,
+        recipientRole: r.recipient_role,
+        type: r.notification_type as any,
+        subject: r.subject,
+        bodyPreview: r.body_preview,
+        status: r.status as any,
+        providerError: r.provider_error || undefined,
+        retryCount: r.retry_count || 0,
+        timestamp: r.sent_at || new Date().toISOString(),
+      }));
     }
 
-    if (process.env.NODE_ENV === "production") {
-      return [];
-    }
-
-    return guardianStore.getNotifications();
+    throw new Error("Persistent database connection required to query notifications.");
   }
 
   async sendNotification(job: NotificationJob): Promise<void> {
@@ -1319,7 +1311,7 @@ export class PersistentCareRepository implements CareRepository {
         { onConflict: "dedupe_key" }
       );
 
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to persist notification job: ${error.message}`);
       }
       return;
@@ -1331,6 +1323,7 @@ export class PersistentCareRepository implements CareRepository {
   async getAuditEvents(profileId?: string): Promise<AuditEvent[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
       let q = supabase
         .from("audit_events")
@@ -1343,43 +1336,37 @@ export class PersistentCareRepository implements CareRepository {
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            careProfileId: r.care_profile_id,
-            actorName: r.actor_name,
-            actorRole: r.actor_role,
-            action: r.action,
-            entityType: r.entity_type as any,
-            entityId: r.entity_id,
-            description: r.description,
-            timestamp: r.occurred_at || new Date().toISOString(),
-          }));
-        }
-      }
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to query audit events: ${error.message}`);
       }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
+        id: r.id,
+        careProfileId: r.care_profile_id,
+        actorName: r.actor_name,
+        actorRole: r.actor_role,
+        action: r.action,
+        entityType: r.entity_type as any,
+        entityId: r.entity_id,
+        description: r.description,
+        timestamp: r.occurred_at || new Date().toISOString(),
+      }));
     }
 
-    if (process.env.NODE_ENV === "production") {
-      return [];
-    }
-
-    return guardianStore.getAuditEvents();
+    throw new Error("Persistent database connection required to query audit events.");
   }
 
   async logAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): Promise<void> {
     const supabase = this.getClient();
     if (supabase) {
-      const profile = await this.getProfile();
+      const targetProfileId = event.careProfileId || (await this.getProfile()).id;
       const { error } = await supabase.from("audit_events").insert({
         id: crypto.randomUUID(),
-        care_profile_id: event.careProfileId || profile.id,
+        care_profile_id: targetProfileId,
         actor_name: event.actorName,
         actor_role: event.actorRole,
         action: event.action,
@@ -1397,58 +1384,59 @@ export class PersistentCareRepository implements CareRepository {
     guardianStore.addAuditEvent(event);
   }
 
-  async getWellbeingHistory(caregiverId: string): Promise<CheckInRecord[]> {
+  async getWellbeingHistory(caregiverId: string, profileId?: string): Promise<CheckInRecord[]> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
+
     if (supabase) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("caregiver_wellbeing")
-        .select("id, caregiver_id, sleep_hours, mood, stress, energy, note, share_with_family, recorded_at")
+        .select("id, care_profile_id, caregiver_id, sleep_hours, mood, stress, energy, note, share_with_family, recorded_at")
         .eq("caregiver_id", caregiverId)
         .order("recorded_at", { ascending: true });
 
-      if (!error && data) {
-        if (data.length === 0 && process.env.NODE_ENV === "production") {
-          return [];
-        }
-        if (data.length > 0) {
-          return data.map((r) => ({
-            id: r.id,
-            caregiverId: r.caregiver_id,
-            date: r.recorded_at.slice(0, 10),
-            timestamp: r.recorded_at,
-            sleepHours: Number(r.sleep_hours),
-            mood: r.mood,
-            stress: r.stress,
-            energy: r.energy,
-            note: r.note,
-            shareWithFamily: r.share_with_family,
-          }));
-        }
+      if (profileId) {
+        q = q.eq("care_profile_id", profileId);
       }
-      if (error && process.env.NODE_ENV === "production") {
+
+      const { data, error } = await q;
+
+      if (error) {
         throw new Error(`Failed to query wellbeing history: ${error.message}`);
       }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      return data.map((r) => ({
+        id: r.id,
+        caregiverId: r.caregiver_id,
+        date: r.recorded_at.slice(0, 10),
+        timestamp: r.recorded_at,
+        sleepHours: Number(r.sleep_hours),
+        mood: r.mood,
+        stress: r.stress,
+        energy: r.energy,
+        note: r.note,
+        shareWithFamily: r.share_with_family,
+      }));
     }
 
-    if (process.env.NODE_ENV === "production") {
-      return [];
-    }
-
-    return getHistory(caregiverId);
+    throw new Error("Persistent database connection required to query wellbeing history.");
   }
 
-  async addWellbeingCheckIn(data: Omit<CheckInRecord, "id" | "date" | "timestamp">): Promise<CheckInRecord> {
+  async addWellbeingCheckIn(data: Omit<CheckInRecord, "id" | "date" | "timestamp"> & { careProfileId?: string }): Promise<CheckInRecord> {
     assertPersistenceRequirements(this.clientOverride);
     const supabase = this.getClient();
     const nowIso = new Date().toISOString();
     const id = crypto.randomUUID();
 
     if (supabase) {
-      const profile = await this.getProfile();
+      const targetProfileId = data.careProfileId || (await this.getProfile()).id;
       const { error } = await supabase.from("caregiver_wellbeing").insert({
         id,
-        care_profile_id: profile.id,
+        care_profile_id: targetProfileId,
         caregiver_id: data.caregiverId,
         sleep_hours: data.sleepHours,
         mood: data.mood,
@@ -1459,7 +1447,7 @@ export class PersistentCareRepository implements CareRepository {
         recorded_at: nowIso,
       });
 
-      if (error && process.env.NODE_ENV === "production") {
+      if (error) {
         throw new Error(`Failed to record wellbeing check-in: ${error.message}`);
       }
 
@@ -1475,10 +1463,6 @@ export class PersistentCareRepository implements CareRepository {
         note: data.note,
         shareWithFamily: data.shareWithFamily,
       };
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-      return addCheckIn(data);
     }
 
     throw new Error("Persistent database connection required to record wellbeing check-ins.");

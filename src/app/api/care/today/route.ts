@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     const { actor } = authResult;
 
     // Fetch through persistent database repository (PostgreSQL/Supabase)
-    const profile = await careRepository.getSanitizedProfile(actor.role);
+    const profile = await careRepository.getSanitizedProfile(actor.role, actor.profileId);
     const members = await careRepository.getMembers(actor.profileId);
     const medications = await careRepository.getMedications(actor.profileId);
     const versions = await careRepository.getMedicationVersions();

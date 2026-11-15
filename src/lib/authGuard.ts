@@ -6,6 +6,7 @@ import { guardianStore } from "@/lib/store";
 export interface AuthorizedActor {
   role: UserRole;
   memberName: string;
+  memberId?: string;
   profileId: string;
   authenticated: boolean;
 }
@@ -64,6 +65,7 @@ export async function requireAuthorizedActor(
       actor: {
         role,
         memberName,
+        memberId: session.memberId,
         profileId,
         authenticated: true,
       },

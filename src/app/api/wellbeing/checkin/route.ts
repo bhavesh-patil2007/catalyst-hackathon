@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
     // 3. Persist through database repository
     const checkIn = await careRepository.addWellbeingCheckIn({
       ...parsed.data,
+      careProfileId: actor.profileId,
       caregiverId: verifiedCaregiverId,
     });
 

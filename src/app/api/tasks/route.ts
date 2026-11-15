@@ -116,6 +116,7 @@ export async function POST(request: Request) {
       }
 
       const task = await careRepository.createBackupRequest({
+        careProfileId: actor.profileId,
         caregiverName,
         reason,
       });

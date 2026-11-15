@@ -45,9 +45,9 @@ export async function POST(request: Request) {
     }
 
     // Persist appointment through database repository
-    const profile = await careRepository.getProfile();
+    const targetProfileId = validated.careProfileId || actor.profileId;
     const newAppt = await careRepository.addAppointment({
-      careProfileId: validated.careProfileId || actor.profileId || profile.id,
+      careProfileId: targetProfileId,
       doctorName: validated.doctorName,
       specialty: validated.specialty,
       clinicName: validated.clinicName,

@@ -6,6 +6,7 @@ export interface SessionData {
   authenticated: boolean;
   role: UserRole;
   profileId: string;
+  memberId?: string;
   memberName: string;
 }
 

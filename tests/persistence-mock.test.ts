@@ -478,7 +478,7 @@ describe("CareOrbit — PersistentCareRepository Database Operations", () => {
 
   it("fails closed in production: returns empty array rather than silent demo fallback", async () => {
     const origEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     try {
       mockTables.appointments = [];
@@ -493,13 +493,13 @@ describe("CareOrbit — PersistentCareRepository Database Operations", () => {
       const tasks = await repo.getTasks();
       expect(tasks).toEqual([]);
     } finally {
-      process.env.NODE_ENV = origEnv;
+      (process.env as any).NODE_ENV = origEnv;
     }
   });
 
   it("fails closed in production: database write failure throws explicit error", async () => {
     const origEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     const failingChain: any = {
       select: () => failingChain,
@@ -537,7 +537,7 @@ describe("CareOrbit — PersistentCareRepository Database Operations", () => {
         })
       ).rejects.toThrow("Failed to insert medication");
     } finally {
-      process.env.NODE_ENV = origEnv;
+      (process.env as any).NODE_ENV = origEnv;
     }
   });
 });

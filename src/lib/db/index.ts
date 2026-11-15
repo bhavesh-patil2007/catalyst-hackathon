@@ -1,3 +1,4 @@
+import "server-only";
 import { Pool, QueryResult, QueryResultRow } from "pg";
 import { getSupabaseServerClient, isSupabaseConfigured } from "../supabase/server";
 
@@ -66,7 +67,7 @@ export async function checkDatabaseHealth(): Promise<{
           connected: false,
           latencyMs: Date.now() - start,
           engine: "supabase",
-          error: error.message,
+          error: process.env.NODE_ENV === "production" ? "Database connectivity check failed" : error.message,
         };
       }
 
@@ -80,7 +81,7 @@ export async function checkDatabaseHealth(): Promise<{
         connected: false,
         latencyMs: Date.now() - start,
         engine: "supabase",
-        error: err?.message || "Supabase connection error",
+        error: process.env.NODE_ENV === "production" ? "Database connectivity check failed" : err?.message,
       };
     }
   }
@@ -100,7 +101,7 @@ export async function checkDatabaseHealth(): Promise<{
         connected: false,
         latencyMs: Date.now() - start,
         engine: "postgresql",
-        error: err?.message || "PostgreSQL health check query failed",
+        error: process.env.NODE_ENV === "production" ? "Database connectivity check failed" : err?.message,
       };
     }
   }

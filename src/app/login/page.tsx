@@ -48,13 +48,13 @@ function LoginForm() {
         const res = await fetch("/api/auth/elder-pin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pin: fullPin }),
+          body: JSON.stringify({ pin: fullPin, redirect: redirectTarget }),
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          router.push(redirectTarget || data.redirectUrl || "/elder");
+          router.push(data.redirectUrl || "/elder");
         } else {
-          setPinError(data.error || "Incorrect 4-digit PIN. (Demo default: 1234)");
+          setPinError(data.error || "Incorrect 4-digit PIN.");
           setPinDigits(["", "", "", ""]);
         }
       } catch {
@@ -86,12 +86,12 @@ function LoginForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code: inviteCode.trim(),
-          name: memberName.trim() || undefined,
+          redirect: redirectTarget,
         }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        router.push(redirectTarget || data.redirectUrl || "/dashboard");
+        router.push(data.redirectUrl || "/dashboard");
       } else {
         setCircleError(data.error || "Invalid invitation code. Check and try again.");
       }
@@ -276,39 +276,6 @@ function LoginForm() {
                 </>
               )}
             </button>
-
-            {/* Role-Specific Demo Credentials Helper */}
-            <div className="mt-6 border-t border-gray-100 pt-4">
-              <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                Demo Role Invitation Codes:
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setInviteCode("OASIS-7629")}
-                  className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-left hover:bg-emerald-100 transition-colors"
-                >
-                  <div className="font-bold text-emerald-900">Family Manager</div>
-                  <div className="font-mono text-[11px] text-emerald-700">OASIS-7629</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInviteCode("CAREGIVER-4192")}
-                  className="p-2 rounded-lg bg-blue-50 border border-blue-200 text-left hover:bg-blue-100 transition-colors"
-                >
-                  <div className="font-bold text-blue-900">Caregiver</div>
-                  <div className="font-mono text-[11px] text-blue-700">CAREGIVER-4192</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInviteCode("OBSERVER-8301")}
-                  className="p-2 rounded-lg bg-purple-50 border border-purple-200 text-left hover:bg-purple-100 transition-colors"
-                >
-                  <div className="font-bold text-purple-900">Read-Only</div>
-                  <div className="font-mono text-[11px] text-purple-700">OBSERVER-8301</div>
-                </button>
-              </div>
-            </div>
           </form>
         )}
       </div>
